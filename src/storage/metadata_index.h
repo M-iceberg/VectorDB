@@ -1,3 +1,34 @@
+// -----------------------------------------------------------------------------
+// metadata_index.h — In-memory inverted index for metadata-based filtering
+//
+// Supports post-filter ANN search: HnswIndex searches with inflated ef_search,
+// then results are filtered here against per-field predicates.
+//
+// String fields: hash_map<field, hash_map<value, vector<NodeId>>>
+//   — supports exact-match (eq) and set membership (in) queries.
+//
+// Numeric fields: hash_map<field, sorted vector<(value, NodeId)>>
+//   — supports range queries via lower_bound / upper_bound. O(log n + k).
+//
+// Boolean fields: stored as string fields with values "0" / "1".
+//
+// API:
+//   insert_string(field, value, id)
+//       Adds id to the inverted list for (field, value).
+//
+//   insert_numeric(field, value, id)
+//       Inserts (value, id) into the sorted numeric list for field.
+//
+//   query_eq(field, value) → vector<NodeId>
+//       Returns all ids where field == value (string equality).
+//
+//   query_range(field, lo, hi) → vector<NodeId>
+//       Returns all ids where lo ≤ field ≤ hi (inclusive).
+//
+//   remove(id)
+//       Removes id from every field index. Called on soft-delete.
+//       O(total entries for id) — acceptable for delete-light workloads.
+// -----------------------------------------------------------------------------
 #pragma once
 #include "core/hnsw_node.h"  // NodeId
 #include <memory>

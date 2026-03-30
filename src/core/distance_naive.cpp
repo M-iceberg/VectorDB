@@ -1,7 +1,28 @@
+// -----------------------------------------------------------------------------
+// distance_naive.cpp — Scalar (portable) distance implementations
+//
+// Provides NaiveL2, NaiveCosine, and NaiveIP: plain C++ loops with no
+// platform-specific intrinsics. Always compiled on all architectures and
+// serves as the correctness baseline for SIMD implementations.
+//
+// Also defines the default DistanceCompute::create() factory, which returns
+// these scalar implementations. On ARM, distance_neon.cpp overrides create()
+// to return NEON-accelerated impls (Day 3). On x86, distance_dispatch.cpp
+// overrides create() with a runtime cpuid check (Day 4).
+//
+// Distance semantics:
+//   L2          — squared Euclidean: Σ(aᵢ−bᵢ)²   (no sqrt; cheaper for ranking)
+//   Cosine      — 1 − dot(a,b) / (‖a‖·‖b‖)        (0=identical, 2=opposite)
+//   InnerProduct— −dot(a,b)                         (lower = more similar)
+// -----------------------------------------------------------------------------
 #include "distance.h"
 #include <cmath>
 
 namespace vectordb {
+
+// -----------------------------------------------------------------------------
+// DistanceCompute — base class method implementations
+// -----------------------------------------------------------------------------
 
 // Default batch: loop over compute(). SIMD subclasses override this.
 void DistanceCompute::compute_batch(const float* query, const float* candidates,
@@ -10,6 +31,11 @@ void DistanceCompute::compute_batch(const float* query, const float* candidates,
         out[i] = compute(query, candidates + i * dim, dim);
     }
 }
+
+// -----------------------------------------------------------------------------
+// Scalar derived class implementations
+// (must be defined before create() so new NaiveL2{} etc. can compile)
+// -----------------------------------------------------------------------------
 
 namespace {
 

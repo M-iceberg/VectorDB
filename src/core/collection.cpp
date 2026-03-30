@@ -1,3 +1,9 @@
+// -----------------------------------------------------------------------------
+// collection.cpp — CollectionSchema + Collection implementation
+//
+// Minimal implementation: stores the schema and provides read-only access.
+// Future: may validate schema on construction (e.g. dim > 0, name non-empty).
+// -----------------------------------------------------------------------------
 #include "collection.h"
 
 namespace vectordb {

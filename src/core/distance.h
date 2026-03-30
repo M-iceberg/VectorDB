@@ -1,3 +1,30 @@
+// -----------------------------------------------------------------------------
+// distance.h — Abstract distance computation interface
+//
+// Defines the DistanceCompute base class and Metric enum used throughout the
+// engine. All distance functions operate on float32 vectors.
+//
+// Implementations (selected by DistanceCompute::create()):
+//   distance_naive.cpp   — scalar fallback, always compiled
+//   distance_neon.cpp    — ARM NEON, compiled on aarch64 only
+//   distance_avx2.cpp    — x86 AVX2,  compiled on x86_64 only
+//   distance_dispatch.cpp— x86 runtime cpuid dispatch, compiled on x86_64 only
+//
+// API:
+//   DistanceCompute::create(metric)
+//       Factory. Returns the fastest available impl for this platform.
+//       Caller owns the returned pointer.
+//
+//   compute(a, b, dim) → float
+//       Distance between two vectors of length dim.
+//       L2: squared Euclidean (no sqrt — cheaper for ranking).
+//       Cosine: 1 − cosine_similarity  (0 = identical, 2 = opposite).
+//       InnerProduct: −dot(a,b)         (lower = more similar).
+//
+//   compute_batch(query, candidates, n, dim, out)
+//       Distances from one query to n contiguous candidates.
+//       Default loops over compute(); SIMD subclasses override for throughput.
+// -----------------------------------------------------------------------------
 #pragma once
 #include <cstddef>
 #include <cstdint>
