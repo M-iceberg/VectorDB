@@ -1,0 +1,43 @@
+syntax = "proto3";
+package vectordb;
+
+// VectorDB gRPC service definition.
+// Compiled and used in Optional / Phase 1.5 (gRPC server mode).
+
+service VectorDB {
+  rpc CreateCollection (CreateCollectionRequest) returns (CreateCollectionResponse);
+  rpc DropCollection   (DropCollectionRequest)   returns (DropCollectionResponse);
+  rpc Insert           (InsertRequest)           returns (InsertResponse);
+  rpc Delete           (DeleteRequest)           returns (DeleteResponse);
+  rpc Search           (SearchRequest)           returns (SearchResponse);
+}
+
+message CreateCollectionRequest {
+  string name   = 1;
+  uint32 dim    = 2;
+  string metric = 3;  // "l2" | "cosine" | "ip"
+}
+message CreateCollectionResponse { bool ok = 1; }
+
+message DropCollectionRequest  { string name = 1; }
+message DropCollectionResponse { bool ok     = 1; }
+
+message InsertRequest {
+  string         collection = 1;
+  uint32         id         = 2;
+  repeated float vector     = 3 [packed = true];
+}
+message InsertResponse { bool ok = 1; }
+
+message DeleteRequest  { string collection = 1; uint32 id = 2; }
+message DeleteResponse { bool ok = 1; }
+
+message SearchRequest {
+  string         collection = 1;
+  repeated float query      = 2 [packed = true];
+  uint32         top_k      = 3;
+  uint32         ef_search  = 4;
+}
+
+message SearchResult { uint32 id = 1; float distance = 2; }
+message SearchResponse { repeated SearchResult results = 1; }
