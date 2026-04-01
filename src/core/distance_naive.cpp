@@ -7,8 +7,8 @@
 //
 // Also defines the default DistanceCompute::create() factory, which returns
 // these scalar implementations. On ARM, distance_neon.cpp overrides create()
-// to return NEON-accelerated impls (Day 3). On x86, distance_dispatch.cpp
-// overrides create() with a runtime cpuid check (Day 4).
+// to return NEON-accelerated impls. On x86, distance_avx2.cpp overrides
+// create() with a runtime cpuid check.
 //
 // Distance semantics:
 //   L2          — squared Euclidean: Σ(aᵢ−bᵢ)²   (no sqrt; cheaper for ranking)
@@ -24,10 +24,18 @@ namespace vectordb {
 // DistanceCompute — base class method implementations
 // -----------------------------------------------------------------------------
 
-// Default batch: loop over compute(). SIMD subclasses override this.
+// Default batch: loop over compute() with prefetch.
+// __builtin_prefetch hints the CPU to load the next candidate vector into cache
+// while the current one is being computed. This hides memory latency when
+// candidates are large enough that they don't fit in L1 cache between iterations.
+// Prefetch distance of 2 vectors ahead is a reasonable default for dim=128–1536.
 void DistanceCompute::compute_batch(const float* query, const float* candidates,
                                     size_t n, size_t dim, float* out) const {
+    constexpr int kPrefetchDistance = 2;
     for (size_t i = 0; i < n; ++i) {
+        if (i + kPrefetchDistance < n) {
+            __builtin_prefetch(candidates + (i + kPrefetchDistance) * dim, 0, 1);
+        }
         out[i] = compute(query, candidates + i * dim, dim);
     }
 }

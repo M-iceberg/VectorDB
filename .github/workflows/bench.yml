@@ -1,0 +1,71 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:  # triggered manually from the GitHub Actions tab
+
+jobs:
+  # -------------------------------------------------------------------------
+  # ARM benchmark: scalar vs NEON, dim=128/768/1536
+  # -------------------------------------------------------------------------
+  bench-arm:
+    name: Benchmark (ARM / NEON)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DVECTORDB_BENCH=ON
+
+      - name: Build
+        run: cmake --build build --target bench_distance
+
+      - name: Run benchmark
+        run: |
+          ./build/bench/bench_distance \
+            --benchmark_out=bench_results/benchmark-arm.json \
+            --benchmark_out_format=json \
+            --benchmark_format=console
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bench_results/benchmark-arm.json
+          git commit -m "bench: update ARM benchmark results" || echo "No changes to commit"
+          git push
+
+  # -------------------------------------------------------------------------
+  # x86 benchmark: scalar vs AVX2, dim=128/768/1536
+  # -------------------------------------------------------------------------
+  bench-x86:
+    name: Benchmark (x86 / AVX2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DVECTORDB_BENCH=ON
+
+      - name: Build
+        run: cmake --build build --target bench_distance
+
+      - name: Run benchmark
+        run: |
+          ./build/bench/bench_distance \
+            --benchmark_out=bench_results/benchmark-x86.json \
+            --benchmark_out_format=json \
+            --benchmark_format=console
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bench_results/benchmark-x86.json
+          git commit -m "bench: update x86 AVX2 benchmark results" || echo "No changes to commit"
+          git push

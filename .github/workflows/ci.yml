@@ -4,26 +4,53 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
-  build-x86:
+  # -------------------------------------------------------------------------
+  # ARM (ubuntu-24.04-arm): tests NEON path
+  # -------------------------------------------------------------------------
+  test-arm:
+    name: Tests (ARM / NEON)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Run tests
+        run: |
+          ./build/tests/unit/test_smoke
+          ./build/tests/unit/test_distance
+          ./build/tests/unit/test_distance_neon
+
+  # -------------------------------------------------------------------------
+  # x86 (ubuntu-latest): tests AVX2 path and verifies x86 compilation
+  # -------------------------------------------------------------------------
+  test-x86:
+    name: Tests (x86 / AVX2)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install CMake
-        run: sudo apt-get install -y cmake
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build
 
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
-
-  # ARM runner added Day 5 (self-hosted or cross-compile)
-  # build-arm:
-  #   runs-on: [self-hosted, arm64]
-  #   ...
+      - name: Run tests
+        run: |
+          ./build/tests/unit/test_smoke
+          ./build/tests/unit/test_distance
+          ./build/tests/unit/test_distance_avx2
