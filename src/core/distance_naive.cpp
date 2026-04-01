@@ -76,9 +76,21 @@ public:
 
 }  // namespace
 
-// Default factory — returns scalar implementation.
-// Day 3: distance_neon.cpp will override this on ARM.
-// Day 4: distance_dispatch.cpp will override this on x86.
+// create_scalar() — always returns the scalar implementation.
+// Used by SIMD unit tests to get the baseline regardless of platform.
+DistanceCompute* DistanceCompute::create_scalar(Metric metric) {
+    switch (metric) {
+        case Metric::L2:           return new NaiveL2{};
+        case Metric::Cosine:       return new NaiveCosine{};
+        case Metric::InnerProduct: return new NaiveIP{};
+    }
+    return nullptr;
+}
+
+// Default factory — returns scalar implementation on generic/x86 builds.
+// On ARM, distance_neon.cpp overrides this with a NEON-accelerated version.
+// On x86, distance_dispatch.cpp overrides this with a runtime cpuid dispatch.
+#if !defined(VECTORDB_ARCH_ARM)
 DistanceCompute* DistanceCompute::create(Metric metric) {
     switch (metric) {
         case Metric::L2:           return new NaiveL2{};
@@ -87,5 +99,6 @@ DistanceCompute* DistanceCompute::create(Metric metric) {
     }
     return nullptr;
 }
+#endif  // !VECTORDB_ARCH_ARM
 
 }  // namespace vectordb

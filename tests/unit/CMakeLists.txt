@@ -7,3 +7,7 @@ endfunction()
 
 vdb_test(test_smoke)
 vdb_test(test_distance)
+
+if(VECTORDB_ARCH STREQUAL "arm")
+    vdb_test(test_distance_neon)   # Day 3: NEON vs scalar correctness
+endif()

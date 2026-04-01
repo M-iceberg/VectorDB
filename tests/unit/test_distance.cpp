@@ -302,5 +302,12 @@ TEST(DistanceFactory, ReturnsNonNullForAllMetrics) {
     }
 }
 
+TEST(DistanceFactory, CreateScalarReturnsNonNullForAllMetrics) {
+    for (Metric m : {Metric::L2, Metric::Cosine, Metric::InnerProduct}) {
+        auto dc = std::unique_ptr<DistanceCompute>(DistanceCompute::create_scalar(m));
+        EXPECT_NE(dc.get(), nullptr) << "metric=" << static_cast<int>(m);
+    }
+}
+
 }  // namespace
 }  // namespace vectordb

@@ -8,8 +8,6 @@
 option(VECTORDB_BENCH "Build benchmarks (requires Google Benchmark)" OFF)
 
 if(VECTORDB_BENCH)
-    find_package(benchmark REQUIRED)
-
     foreach(bench distance hnsw storage)
         add_executable(bench_${bench} bench_${bench}.cpp)
         target_link_libraries(bench_${bench} PRIVATE

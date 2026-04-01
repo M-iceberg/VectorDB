@@ -23,6 +23,20 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+# --------------------------------------------------------------------------
+# Google Benchmark (only fetched when VECTORDB_BENCH=ON)
+# --------------------------------------------------------------------------
+if(VECTORDB_BENCH)
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        googlebenchmark
+        URL https://github.com/google/benchmark/archive/refs/tags/v1.8.4.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(googlebenchmark)
+endif()
+
 enable_testing()
 include(GoogleTest)
 

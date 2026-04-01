@@ -56,8 +56,15 @@ public:
                                size_t n, size_t dim, float* out) const;
 
     // Factory: returns the best available implementation for this platform.
+    // On ARM, returns NEON-accelerated impl (distance_neon.cpp overrides this).
+    // On x86, returns AVX2/scalar impl (distance_dispatch.cpp overrides this).
     // Caller owns the returned pointer.
     static DistanceCompute* create(Metric metric);
+
+    // Always returns the scalar (naive) implementation regardless of platform.
+    // Used by SIMD unit tests to validate NEON/AVX2 results against the baseline.
+    // Caller owns the returned pointer.
+    static DistanceCompute* create_scalar(Metric metric);
 };
 
 }  // namespace vectordb
