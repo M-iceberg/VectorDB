@@ -38,6 +38,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add bench_results/benchmark-arm.json
           git commit -m "bench: update ARM benchmark results" || echo "No changes to commit"
+          git pull --rebase
           git push
 
   # -------------------------------------------------------------------------
@@ -71,4 +72,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add bench_results/benchmark-x86.json
           git commit -m "bench: update x86 AVX2 benchmark results" || echo "No changes to commit"
+          git pull --rebase
           git push
