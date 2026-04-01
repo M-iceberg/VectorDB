@@ -7,8 +7,7 @@
 // Implementations (selected by DistanceCompute::create()):
 //   distance_naive.cpp   — scalar fallback, always compiled
 //   distance_neon.cpp    — ARM NEON, compiled on aarch64 only
-//   distance_avx2.cpp    — x86 AVX2,  compiled on x86_64 only
-//   distance_dispatch.cpp— x86 runtime cpuid dispatch, compiled on x86_64 only
+//   distance_avx2.cpp    — x86 AVX2 + runtime cpuid dispatch, compiled on x86_64 only
 //
 // API:
 //   DistanceCompute::create(metric)
@@ -57,7 +56,7 @@ public:
 
     // Factory: returns the best available implementation for this platform.
     // On ARM, returns NEON-accelerated impl (distance_neon.cpp overrides this).
-    // On x86, returns AVX2/scalar impl (distance_dispatch.cpp overrides this).
+    // On x86, checks AVX2 support at runtime and returns AVX2 or scalar fallback.
     // Caller owns the returned pointer.
     static DistanceCompute* create(Metric metric);
 
@@ -65,6 +64,11 @@ public:
     // Used by SIMD unit tests to validate NEON/AVX2 results against the baseline.
     // Caller owns the returned pointer.
     static DistanceCompute* create_scalar(Metric metric);
+
+    // Always returns the AVX2 implementation. Only callable on x86 builds;
+    // used by unit tests to validate AVX2 results against the scalar baseline.
+    // Caller owns the returned pointer.
+    static DistanceCompute* create_avx2(Metric metric);
 };
 
 }  // namespace vectordb

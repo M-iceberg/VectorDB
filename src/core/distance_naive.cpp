@@ -87,10 +87,10 @@ DistanceCompute* DistanceCompute::create_scalar(Metric metric) {
     return nullptr;
 }
 
-// Default factory — returns scalar implementation on generic/x86 builds.
+// Default factory — returns scalar implementation on generic builds only.
 // On ARM, distance_neon.cpp overrides this with a NEON-accelerated version.
 // On x86, distance_dispatch.cpp overrides this with a runtime cpuid dispatch.
-#if !defined(VECTORDB_ARCH_ARM)
+#if !defined(VECTORDB_ARCH_ARM) && !defined(VECTORDB_ARCH_X86)
 DistanceCompute* DistanceCompute::create(Metric metric) {
     switch (metric) {
         case Metric::L2:           return new NaiveL2{};
@@ -99,6 +99,6 @@ DistanceCompute* DistanceCompute::create(Metric metric) {
     }
     return nullptr;
 }
-#endif  // !VECTORDB_ARCH_ARM
+#endif  // !VECTORDB_ARCH_ARM && !VECTORDB_ARCH_X86
 
 }  // namespace vectordb

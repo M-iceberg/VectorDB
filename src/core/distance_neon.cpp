@@ -7,10 +7,15 @@
 //   Scalar general-purpose registers are 64-bit and hold one float at a time.
 //   NEON vector registers are 128-bit and hold 4 floats simultaneously.
 //   A single NEON instruction operates on all 4 lanes in parallel, so:
-//     - Fewer memory loads: one vld1q_f32 replaces 4 scalar loads.
-//     - Fewer instructions: one vmlaq_f32 replaces 4 multiplies + 4 adds.
+//     - Fewer load instructions: one vld1q_f32 issues 1 load instruction for
+//       4 floats instead of 4 separate instructions. The actual memory traffic
+//       is the same — both scalar and SIMD pull a full 64-byte cache line — but
+//       SIMD uses 4x fewer instructions to do it.
+//     - Fewer compute instructions: one vmlaq_f32 replaces 4 multiplies + 4 adds.
 //     - Fewer loop iterations: the main loop steps by 4 instead of 1,
 //       reducing loop-control overhead (increment, compare, branch) by 4x.
+//   Fewer total instructions means the CPU pipeline stays fuller — less time
+//   stalled waiting for the next instruction to decode and dispatch.
 //   The accumulators (vsum, vdot, etc.) live in vector registers for the
 //   entire loop, never touching memory until vaddvq_f32 collapses them
 //   into a scalar at the end.

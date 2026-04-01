@@ -6,7 +6,7 @@ set(CORE_SOURCES
 if(VECTORDB_ARCH STREQUAL "arm")
     list(APPEND CORE_SOURCES distance_neon.cpp)      # Day 3
 elseif(VECTORDB_ARCH STREQUAL "x86")
-    list(APPEND CORE_SOURCES distance_avx2.cpp distance_dispatch.cpp)  # Day 4
+    list(APPEND CORE_SOURCES distance_avx2.cpp)  # Day 4
 endif()
 
 # hnsw_index.cpp    added Day 6–10
