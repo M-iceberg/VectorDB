@@ -26,6 +26,7 @@
 // -----------------------------------------------------------------------------
 #include <benchmark/benchmark.h>
 #include "core/distance.h"
+#include <memory>
 #include <random>
 #include <vector>
 

@@ -3,6 +3,9 @@ name: Benchmark
 on:
   workflow_dispatch:  # triggered manually from the GitHub Actions tab
 
+permissions:
+  contents: write  # needed to commit and push benchmark results
+
 jobs:
   # -------------------------------------------------------------------------
   # ARM benchmark: scalar vs NEON, dim=128/768/1536
