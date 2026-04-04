@@ -9,8 +9,12 @@
 //   metric           — distance function (L2 / Cosine / InnerProduct)
 //   M                — max neighbors per node on layers 1+ (typ. 16)
 //   M0               — max neighbors at layer 0 (typ. 2*M = 32)
-//   ef_construction  — beam width during insert (higher → better recall,
-//                      slower build; typ. 200)
+//   ef_construction  — candidate pool size during insert's beam search.
+//                      beam search keeps up to ef_construction candidates,
+//                      then picks the closest M (or M0) from that pool to
+//                      connect as neighbors. higher → better neighbor quality
+//                      → higher recall, but slower inserts. only affects
+//                      build time; has no effect during search. (typ. 200)
 //
 // API:
 //   HnswIndex(cfg)
@@ -55,7 +59,9 @@ struct HnswConfig {
 // insert / search / remove (tombstone) — see hnsw_index.cpp for implementation.
 class HnswIndex {
 public:
-    explicit HnswIndex(HnswConfig cfg);
+    explicit HnswIndex(HnswConfig cfg);  // explicit prevents implicit conversion:
+                                         // compiler cannot silently turn a HnswConfig
+                                         // into a HnswIndex; must call it directly.
     ~HnswIndex();
 
     void insert(NodeId id, const float* vec);
@@ -73,6 +79,11 @@ public:
     HnswIndex& operator=(const HnswIndex&) = delete;
 
 private:
+    // Pimpl (pointer to implementation): all internal state (nodes, vectors,
+    // entry point, rng, etc.) is defined in hnsw_index.cpp, not here.
+    // This header only forward-declares Impl — callers cannot access or even
+    // see the internal fields. The unique_ptr owns the Impl and frees it on
+    // destruction. To change internals, only hnsw_index.cpp needs recompiling.
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

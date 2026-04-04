@@ -26,9 +26,18 @@ static constexpr NodeId kInvalidNode = ~NodeId{0};
 
 struct HnswNode {
     NodeId id = kInvalidNode;
-    int    layer = 0;                            // highest layer this node appears in
+    int    layer = 0;                            // highest layer this node appears in.
+                                               // a node with layer=2 has neighbor lists at
+                                               // layers 0, 1, and 2 (neighbors.size() == 3).
+                                               // most nodes get layer=0 (bottom layer only);
+                                               // a few are randomly assigned higher layers
+                                               // and act as "highway" nodes for fast traversal.
     std::vector<std::vector<NodeId>> neighbors;  // neighbors[level][i]
     bool   tombstone = false;                    // soft-deleted; skipped in search results
+    // Note: the actual float vector is NOT stored here.
+    // HnswNode only holds graph structure (edges). The raw vector data is stored
+    // separately as a key-value mapping id → float[], looked up by id when
+    // computing distances. This separation keeps the graph compact in memory.
 };
 
 }  // namespace vectordb
