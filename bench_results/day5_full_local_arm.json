@@ -1,9 +1,9 @@
 {
   "context": {
-    "date": "2026-04-01T00:00:30-07:00",
-    "host_name": "Zhiyus-MacBook-Air.local",
-    "executable": "./build/bench/bench_distance",
-    "num_cpus": 10,
+    "date": "2026-04-04T18:10:21-07:00",
+    "host_name": "Bingyis-MacBook-Pro.local",
+    "executable": "./build_release/bench/bench_distance",
+    "num_cpus": 18,
     "mhz_per_cpu": 24,
     "cpu_scaling_enabled": false,
     "caches": [
@@ -22,11 +22,11 @@
       {
         "type": "Unified",
         "level": 2,
-        "size": 4194304,
+        "size": 8388608,
         "num_sharing": 1
       }
     ],
-    "load_avg": [1.68555,2.12402,2.9834],
+    "load_avg": [1.66895,1.54004,1.94336],
     "library_version": "v0.0.0",
     "library_build_type": "release",
     "json_schema_version": 1
@@ -41,11 +41,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 24404274,
-      "real_time": 2.9564785458008540e+01,
-      "cpu_time": 2.9486187542395228e+01,
+      "iterations": 26586653,
+      "real_time": 2.6667962868649610e+01,
+      "cpu_time": 2.6625653104962097e+01,
       "time_unit": "ns",
-      "items_per_second": 4.3410155964029474e+09
+      "items_per_second": 4.8073938128543119e+09
     },
     {
       "name": "BM_Scalar<Metric::L2>/768",
@@ -56,11 +56,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2260033,
-      "real_time": 3.1095078743773053e+02,
-      "cpu_time": 3.1067466713981599e+02,
+      "iterations": 2416284,
+      "real_time": 2.8987710757609909e+02,
+      "cpu_time": 2.8966462551587472e+02,
       "time_unit": "ns",
-      "items_per_second": 2.4720393428614163e+09
+      "items_per_second": 2.6513420429996920e+09
     },
     {
       "name": "BM_Scalar<Metric::L2>/1536",
@@ -71,11 +71,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 1008428,
-      "real_time": 6.9514605910913599e+02,
-      "cpu_time": 6.9442637451558232e+02,
+      "iterations": 1066082,
+      "real_time": 6.5633150920492812e+02,
+      "cpu_time": 6.5586324504118807e+02,
       "time_unit": "ns",
-      "items_per_second": 2.2118975551173186e+09
+      "items_per_second": 2.3419516364322863e+09
     },
     {
       "name": "BM_Simd<Metric::L2>/128",
@@ -86,11 +86,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 65973008,
-      "real_time": 1.0707409309343404e+01,
-      "cpu_time": 1.0703589564993001e+01,
+      "iterations": 80735384,
+      "real_time": 8.5161756091144571e+00,
+      "cpu_time": 8.5095030947025663e+00,
       "time_unit": "ns",
-      "items_per_second": 1.1958605028974100e+10
+      "items_per_second": 1.5042006398667864e+10
     },
     {
       "name": "BM_Simd<Metric::L2>/768",
@@ -101,11 +101,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6301594,
-      "real_time": 1.1112417220623776e+02,
-      "cpu_time": 1.1111807583922430e+02,
+      "iterations": 7455057,
+      "real_time": 9.4042221944546839e+01,
+      "cpu_time": 9.3971514905922234e+01,
       "time_unit": "ns",
-      "items_per_second": 6.9115667653497877e+09
+      "items_per_second": 8.1726893598434420e+09
     },
     {
       "name": "BM_Simd<Metric::L2>/1536",
@@ -116,11 +116,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2490474,
-      "real_time": 2.7894261653832945e+02,
-      "cpu_time": 2.7893244418532373e+02,
+      "iterations": 2947344,
+      "real_time": 2.3736649268002856e+02,
+      "cpu_time": 2.3718948314143151e+02,
       "time_unit": "ns",
-      "items_per_second": 5.5067097141968746e+09
+      "items_per_second": 6.4758351831481199e+09
     },
     {
       "name": "BM_Scalar<Metric::Cosine>/128",
@@ -131,11 +131,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 11943354,
-      "real_time": 5.8686944894768935e+01,
-      "cpu_time": 5.8684687735120271e+01,
+      "iterations": 15842947,
+      "real_time": 4.4318048908053861e+01,
+      "cpu_time": 4.4282544150403368e+01,
       "time_unit": "ns",
-      "items_per_second": 2.1811481826016002e+09
+      "items_per_second": 2.8905294954430494e+09
     },
     {
       "name": "BM_Scalar<Metric::Cosine>/768",
@@ -146,11 +146,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 1553481,
-      "real_time": 4.4864270432188721e+02,
-      "cpu_time": 4.4860928456801224e+02,
+      "iterations": 1926888,
+      "real_time": 3.6342676221569684e+02,
+      "cpu_time": 3.6314980424394184e+02,
       "time_unit": "ns",
-      "items_per_second": 1.7119574347185984e+09
+      "items_per_second": 2.1148297232293274e+09
     },
     {
       "name": "BM_Scalar<Metric::Cosine>/1536",
@@ -161,11 +161,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 760936,
-      "real_time": 9.2324354441480602e+02,
-      "cpu_time": 9.2321167614622038e+02,
+      "iterations": 916566,
+      "real_time": 7.6315180794684875e+02,
+      "cpu_time": 7.6258556394193056e+02,
       "time_unit": "ns",
-      "items_per_second": 1.6637571205898881e+09
+      "items_per_second": 2.0142002060203743e+09
     },
     {
       "name": "BM_Simd<Metric::Cosine>/128",
@@ -176,11 +176,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 52100002,
-      "real_time": 1.3468032105356091e+01,
-      "cpu_time": 1.3463089694315189e+01,
+      "iterations": 60453749,
+      "real_time": 1.1580550761262598e+01,
+      "cpu_time": 1.1571457710587982e+01,
       "time_unit": "ns",
-      "items_per_second": 9.5074758399662304e+09
+      "items_per_second": 1.1061700539498920e+10
     },
     {
       "name": "BM_Simd<Metric::Cosine>/768",
@@ -191,11 +191,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 5720076,
-      "real_time": 1.2129478265893320e+02,
-      "cpu_time": 1.2121272514560995e+02,
+      "iterations": 6733748,
+      "real_time": 1.0418955520829483e+02,
+      "cpu_time": 1.0410101476918959e+02,
       "time_unit": "ns",
-      "items_per_second": 6.3359684313459654e+09
+      "items_per_second": 7.3774496982838459e+09
     },
     {
       "name": "BM_Simd<Metric::Cosine>/1536",
@@ -206,11 +206,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2372704,
-      "real_time": 3.0232203807285890e+02,
-      "cpu_time": 3.0154077373325902e+02,
+      "iterations": 2715062,
+      "real_time": 2.5773102344937814e+02,
+      "cpu_time": 2.5752524251748207e+02,
       "time_unit": "ns",
-      "items_per_second": 5.0938384915027637e+09
+      "items_per_second": 5.9644638521046295e+09
     },
     {
       "name": "BM_Scalar<Metric::InnerProduct>/128",
@@ -221,11 +221,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 24910589,
-      "real_time": 2.7693062589533834e+01,
-      "cpu_time": 2.7666507604456914e+01,
+      "iterations": 29730556,
+      "real_time": 2.3548704706394009e+01,
+      "cpu_time": 2.3530673291141980e+01,
       "time_unit": "ns",
-      "items_per_second": 4.6265326231265974e+09
+      "items_per_second": 5.4397083507247133e+09
     },
     {
       "name": "BM_Scalar<Metric::InnerProduct>/768",
@@ -236,11 +236,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2269375,
-      "real_time": 3.0648972735494266e+02,
-      "cpu_time": 3.0625877168824047e+02,
+      "iterations": 2505064,
+      "real_time": 2.7931365586217720e+02,
+      "cpu_time": 2.7910424643841475e+02,
       "time_unit": "ns",
-      "items_per_second": 2.5076832763562250e+09
+      "items_per_second": 2.7516600331247973e+09
     },
     {
       "name": "BM_Scalar<Metric::InnerProduct>/1536",
@@ -251,11 +251,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 1017264,
-      "real_time": 6.9362488511266758e+02,
-      "cpu_time": 6.9292632001132415e+02,
+      "iterations": 1090275,
+      "real_time": 6.4240665612984253e+02,
+      "cpu_time": 6.4192428515741392e+02,
       "time_unit": "ns",
-      "items_per_second": 2.2166858952260580e+09
+      "items_per_second": 2.3928055621440449e+09
     },
     {
       "name": "BM_Simd<Metric::InnerProduct>/128",
@@ -266,11 +266,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 40049662,
-      "real_time": 1.7549325184955158e+01,
-      "cpu_time": 1.7536352741254099e+01,
+      "iterations": 80652595,
+      "real_time": 8.5687958956151409e+00,
+      "cpu_time": 8.5624027348406937e+00,
       "time_unit": "ns",
-      "items_per_second": 7.2991232492079868e+09
+      "items_per_second": 1.4949074922528913e+10
     },
     {
       "name": "BM_Simd<Metric::InnerProduct>/768",
@@ -281,11 +281,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6085316,
-      "real_time": 1.1466438221602715e+02,
-      "cpu_time": 1.1465665875034301e+02,
+      "iterations": 7637919,
+      "real_time": 9.1676061765892896e+01,
+      "cpu_time": 9.1606627407281948e+01,
       "time_unit": "ns",
-      "items_per_second": 6.6982590315340261e+09
+      "items_per_second": 8.3836729037679920e+09
     },
     {
       "name": "BM_Simd<Metric::InnerProduct>/1536",
@@ -296,11 +296,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2664332,
-      "real_time": 2.6104631176986845e+02,
-      "cpu_time": 2.6095959512553236e+02,
+      "iterations": 3071347,
+      "real_time": 2.2813418672761637e+02,
+      "cpu_time": 2.2796577527710116e+02,
       "time_unit": "ns",
-      "items_per_second": 5.8859686659964371e+09
+      "items_per_second": 6.7378535139010801e+09
     },
     {
       "name": "BM_ScalarBatch<Metric::L2>/768",
@@ -311,11 +311,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2104,
-      "real_time": 3.3246595771034237e+05,
-      "cpu_time": 3.3211406844106520e+05,
+      "iterations": 2361,
+      "real_time": 2.9702753070501267e+05,
+      "cpu_time": 2.9676577721304371e+05,
       "time_unit": "ns",
-      "items_per_second": 2.3679575023469839e+09
+      "items_per_second": 2.6500090656862779e+09
     },
     {
       "name": "BM_SimdBatch<Metric::L2>/768",
@@ -326,11 +326,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6068,
-      "real_time": 1.1357905535947043e+05,
-      "cpu_time": 1.1350840474620972e+05,
+      "iterations": 7269,
+      "real_time": 9.6266989956756865e+04,
+      "cpu_time": 9.6182556059980809e+04,
       "time_unit": "ns",
-      "items_per_second": 6.9284032469521646e+09
+      "items_per_second": 8.1764514504019814e+09
     },
     {
       "name": "BM_ScalarBatch<Metric::Cosine>/768",
@@ -341,11 +341,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 1518,
-      "real_time": 4.6064330839180190e+05,
-      "cpu_time": 4.6050790513834037e+05,
+      "iterations": 1881,
+      "real_time": 3.7272255449032970e+05,
+      "cpu_time": 3.7239447102604987e+05,
       "time_unit": "ns",
-      "items_per_second": 1.7077491856817296e+09
+      "items_per_second": 2.1118251241302323e+09
     },
     {
       "name": "BM_SimdBatch<Metric::Cosine>/768",
@@ -356,11 +356,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 5542,
-      "real_time": 1.2562842837974122e+05,
-      "cpu_time": 1.2562342114760062e+05,
+      "iterations": 6500,
+      "real_time": 1.0941591030971792e+05,
+      "cpu_time": 1.0865507692307720e+05,
       "time_unit": "ns",
-      "items_per_second": 6.2602339023706865e+09
+      "items_per_second": 7.2378762435257187e+09
     },
     {
       "name": "BM_ScalarBatch<Metric::InnerProduct>/768",
@@ -371,11 +371,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2158,
-      "real_time": 3.3119711545887263e+05,
-      "cpu_time": 3.3028730305838713e+05,
+      "iterations": 2454,
+      "real_time": 2.8650611247295234e+05,
+      "cpu_time": 2.8625550122249353e+05,
       "time_unit": "ns",
-      "items_per_second": 2.3810542903642201e+09
+      "items_per_second": 2.7473079002549605e+09
     },
     {
       "name": "BM_SimdBatch<Metric::InnerProduct>/768",
@@ -386,11 +386,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 5949,
-      "real_time": 1.1780415485513012e+05,
-      "cpu_time": 1.1775071440578258e+05,
+      "iterations": 7479,
+      "real_time": 9.3873228372927289e+04,
+      "cpu_time": 9.3788073271827190e+04,
       "time_unit": "ns",
-      "items_per_second": 6.6787875043361883e+09
+      "items_per_second": 8.3852026442709188e+09
     },
     {
       "name": "BM_BatchNoPrefetch<Metric::L2>/768",
@@ -401,11 +401,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6160,
-      "real_time": 1.1399903262106629e+05,
-      "cpu_time": 1.1396363636363586e+05,
+      "iterations": 7259,
+      "real_time": 9.6656656014325155e+04,
+      "cpu_time": 9.6576387932222089e+04,
       "time_unit": "ns",
-      "items_per_second": 6.9007275047862463e+09
+      "items_per_second": 8.1431084433590841e+09
     },
     {
       "name": "BM_SimdBatch<Metric::L2>/768",
@@ -416,11 +416,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6165,
-      "real_time": 1.1360444036363008e+05,
-      "cpu_time": 1.1356674776966749e+05,
+      "iterations": 7283,
+      "real_time": 9.6213139091958757e+04,
+      "cpu_time": 9.6125360428395012e+04,
       "time_unit": "ns",
-      "items_per_second": 6.9248438952836504e+09
+      "items_per_second": 8.1813165276589327e+09
     },
     {
       "name": "BM_BatchNoPrefetch<Metric::Cosine>/768",
@@ -431,11 +431,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 5563,
-      "real_time": 1.2536352545856015e+05,
-      "cpu_time": 1.2527682904907370e+05,
+      "iterations": 6437,
+      "real_time": 1.0757143591682972e+05,
+      "cpu_time": 1.0748050334006482e+05,
       "time_unit": "ns",
-      "items_per_second": 6.2775535266137457e+09
+      "items_per_second": 7.3169735492562284e+09
     },
     {
       "name": "BM_SimdBatch<Metric::Cosine>/768",
@@ -446,11 +446,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 5553,
-      "real_time": 1.2543715102882852e+05,
-      "cpu_time": 1.2540932829101360e+05,
+      "iterations": 6527,
+      "real_time": 1.0709826490060662e+05,
+      "cpu_time": 1.0699908074153567e+05,
       "time_unit": "ns",
-      "items_per_second": 6.2709210767406130e+09
+      "items_per_second": 7.3498949201225910e+09
     },
     {
       "name": "BM_BatchNoPrefetch<Metric::InnerProduct>/768",
@@ -461,11 +461,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 5944,
-      "real_time": 1.1804136529083528e+05,
-      "cpu_time": 1.1791184387617704e+05,
+      "iterations": 7438,
+      "real_time": 9.4073137940684159e+04,
+      "cpu_time": 9.3998924442054267e+04,
       "time_unit": "ns",
-      "items_per_second": 6.6696607749248428e+09
+      "items_per_second": 8.3663936015012255e+09
     },
     {
       "name": "BM_SimdBatch<Metric::InnerProduct>/768",
@@ -476,11 +476,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 5948,
-      "real_time": 1.1783392887585060e+05,
-      "cpu_time": 1.1773570948217846e+05,
+      "iterations": 7445,
+      "real_time": 9.3961125989901149e+04,
+      "cpu_time": 9.3880053727333900e+04,
       "time_unit": "ns",
-      "items_per_second": 6.6796386878616590e+09
+      "items_per_second": 8.3769871104262524e+09
     },
     {
       "name": "BM_Scalar<Metric::L2>/7",
@@ -491,11 +491,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 396699460,
-      "real_time": 1.7657303870098631e+00,
-      "cpu_time": 1.7641844029734726e+00,
+      "iterations": 401728581,
+      "real_time": 1.7550586175602259e+00,
+      "cpu_time": 1.7537363118309008e+00,
       "time_unit": "ns",
-      "items_per_second": 3.9678391829117975e+09
+      "items_per_second": 3.9914780533294649e+09
     },
     {
       "name": "BM_Scalar<Metric::L2>/769",
@@ -506,11 +506,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2110112,
-      "real_time": 3.2910050134623390e+02,
-      "cpu_time": 3.2883420406120484e+02,
+      "iterations": 2410535,
+      "real_time": 2.9082892055511689e+02,
+      "cpu_time": 2.9062137658237663e+02,
       "time_unit": "ns",
-      "items_per_second": 2.3385645121541815e+09
+      "items_per_second": 2.6460544955199704e+09
     },
     {
       "name": "BM_Simd<Metric::L2>/7",
@@ -521,11 +521,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 401853117,
-      "real_time": 1.8125520940398310e+00,
-      "cpu_time": 1.8110995515806783e+00,
+      "iterations": 471056917,
+      "real_time": 1.4831808190870917e+00,
+      "cpu_time": 1.4820629414512940e+00,
       "time_unit": "ns",
-      "items_per_second": 3.8650553438051434e+09
+      "items_per_second": 4.7231462336851406e+09
     },
     {
       "name": "BM_Simd<Metric::L2>/769",
@@ -536,11 +536,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6286371,
-      "real_time": 1.1128305713250700e+02,
-      "cpu_time": 1.1119117850346423e+02,
+      "iterations": 7391920,
+      "real_time": 9.4787270018901722e+01,
+      "cpu_time": 9.4711252286280697e+01,
       "time_unit": "ns",
-      "items_per_second": 6.9160162735035791e+09
+      "items_per_second": 8.1194153961302080e+09
     },
     {
       "name": "BM_SimdUnaligned<Metric::L2>/128",
@@ -551,11 +551,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 66650797,
-      "real_time": 1.0539076897475983e+01,
-      "cpu_time": 1.0528111164221965e+01,
+      "iterations": 79677647,
+      "real_time": 8.7713245347143545e+00,
+      "cpu_time": 8.7644656474355607e+00,
       "time_unit": "ns",
-      "items_per_second": 1.2157926336776031e+10
+      "items_per_second": 1.4604427143536373e+10
     },
     {
       "name": "BM_SimdUnaligned<Metric::L2>/768",
@@ -566,11 +566,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6262749,
-      "real_time": 1.1136851927028067e+02,
-      "cpu_time": 1.1131597322517661e+02,
+      "iterations": 7407329,
+      "real_time": 9.4422969465861556e+01,
+      "cpu_time": 9.4350878704050629e+01,
       "time_unit": "ns",
-      "items_per_second": 6.8992793913452444e+09
+      "items_per_second": 8.1398288023260202e+09
     },
     {
       "name": "BM_SimdUnaligned<Metric::L2>/1536",
@@ -581,11 +581,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2489013,
-      "real_time": 2.8121099930270555e+02,
-      "cpu_time": 2.8087800264603158e+02,
+      "iterations": 2931778,
+      "real_time": 2.3871161390933497e+02,
+      "cpu_time": 2.3852999783748996e+02,
       "time_unit": "ns",
-      "items_per_second": 5.4685663723395939e+09
+      "items_per_second": 6.4394416380554113e+09
     },
     {
       "name": "BM_SimdUnaligned<Metric::Cosine>/128",
@@ -596,11 +596,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 52298129,
-      "real_time": 1.3394730317392590e+01,
-      "cpu_time": 1.3384933904614435e+01,
+      "iterations": 60210392,
+      "real_time": 1.1758137747882119e+01,
+      "cpu_time": 1.1750147715364506e+01,
       "time_unit": "ns",
-      "items_per_second": 9.5629908158061352e+09
+      "items_per_second": 1.0893480073669802e+10
     },
     {
       "name": "BM_SimdUnaligned<Metric::Cosine>/768",
@@ -611,11 +611,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 5663476,
-      "real_time": 1.2283929076552219e+02,
-      "cpu_time": 1.2270432504702040e+02,
+      "iterations": 6643572,
+      "real_time": 1.0561630731216455e+02,
+      "cpu_time": 1.0553103059619183e+02,
       "time_unit": "ns",
-      "items_per_second": 6.2589480827648230e+09
+      "items_per_second": 7.2774803359848347e+09
     },
     {
       "name": "BM_SimdUnaligned<Metric::Cosine>/1536",
@@ -626,11 +626,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2333147,
-      "real_time": 3.0022440381027712e+02,
-      "cpu_time": 2.9999052781501030e+02,
+      "iterations": 2676772,
+      "real_time": 2.6198852274410524e+02,
+      "cpu_time": 2.6178359606272096e+02,
       "time_unit": "ns",
-      "items_per_second": 5.1201616637281857e+09
+      "items_per_second": 5.8674417461665115e+09
     },
     {
       "name": "BM_SimdUnaligned<Metric::InnerProduct>/128",
@@ -641,11 +641,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 39568366,
-      "real_time": 1.7695294136010475e+01,
-      "cpu_time": 1.7675635127313576e+01,
+      "iterations": 80490301,
+      "real_time": 8.6632104531557239e+00,
+      "cpu_time": 8.6561112499752575e+00,
       "time_unit": "ns",
-      "items_per_second": 7.2416068264616880e+09
+      "items_per_second": 1.4787240633069021e+10
     },
     {
       "name": "BM_SimdUnaligned<Metric::InnerProduct>/768",
@@ -656,11 +656,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6094747,
-      "real_time": 1.1520727754193865e+02,
-      "cpu_time": 1.1518131925738602e+02,
+      "iterations": 7596640,
+      "real_time": 9.2037175909298568e+01,
+      "cpu_time": 9.1965526864509044e+01,
       "time_unit": "ns",
-      "items_per_second": 6.6677479034930563e+09
+      "items_per_second": 8.3509552566526251e+09
     },
     {
       "name": "BM_SimdUnaligned<Metric::InnerProduct>/1536",
@@ -671,11 +671,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2663430,
-      "real_time": 2.6325587077594662e+02,
-      "cpu_time": 2.6307768554082674e+02,
+      "iterations": 3058024,
+      "real_time": 2.2942377692177939e+02,
+      "cpu_time": 2.2925882857688259e+02,
       "time_unit": "ns",
-      "items_per_second": 5.8385795695379486e+09
+      "items_per_second": 6.6998510353327475e+09
     }
   ]
 }

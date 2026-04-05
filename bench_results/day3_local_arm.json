@@ -1,9 +1,9 @@
 {
   "context": {
-    "date": "2026-03-31T19:31:02-07:00",
-    "host_name": "Zhiyus-MacBook-Air.local",
-    "executable": "./build/bench/bench_distance",
-    "num_cpus": 10,
+    "date": "2026-04-04T18:10:21-07:00",
+    "host_name": "Bingyis-MacBook-Pro.local",
+    "executable": "./build_release/bench/bench_distance",
+    "num_cpus": 18,
     "mhz_per_cpu": 24,
     "cpu_scaling_enabled": false,
     "caches": [
@@ -22,11 +22,15 @@
       {
         "type": "Unified",
         "level": 2,
-        "size": 4194304,
+        "size": 8388608,
         "num_sharing": 1
       }
     ],
-    "load_avg": [2.60693,2.76123,2.90576],
+    "load_avg": [
+      1.66895,
+      1.54004,
+      1.94336
+    ],
     "library_version": "v0.0.0",
     "library_build_type": "release",
     "json_schema_version": 1
@@ -41,11 +45,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 24389054,
-      "real_time": 2.9161956919703226e+01,
-      "cpu_time": 2.9156850446105860e+01,
+      "iterations": 26586653,
+      "real_time": 26.66796286864961,
+      "cpu_time": 26.625653104962097,
       "time_unit": "ns",
-      "items_per_second": 4.3900489264640541e+09
+      "items_per_second": 4807393812.854312
     },
     {
       "name": "BM_Scalar<Metric::L2>/768",
@@ -56,11 +60,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2260077,
-      "real_time": 3.1063766489123810e+02,
-      "cpu_time": 3.1031730334851414e+02,
+      "iterations": 2416284,
+      "real_time": 289.8771075760991,
+      "cpu_time": 289.6646255158747,
       "time_unit": "ns",
-      "items_per_second": 2.4748861623660965e+09
+      "items_per_second": 2651342042.999692
     },
     {
       "name": "BM_Scalar<Metric::L2>/1536",
@@ -71,11 +75,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 1007977,
-      "real_time": 6.9603249907563600e+02,
-      "cpu_time": 6.9551190156124596e+02,
+      "iterations": 1066082,
+      "real_time": 656.3315092049281,
+      "cpu_time": 655.8632450411881,
       "time_unit": "ns",
-      "items_per_second": 2.2084453142384391e+09
+      "items_per_second": 2341951636.4322863
     },
     {
       "name": "BM_Simd<Metric::L2>/128",
@@ -86,11 +90,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 66853857,
-      "real_time": 1.0591457604211012e+01,
-      "cpu_time": 1.0580257171998324e+01,
+      "iterations": 80735384,
+      "real_time": 8.516175609114457,
+      "cpu_time": 8.509503094702566,
       "time_unit": "ns",
-      "items_per_second": 1.2098004606047234e+10
+      "items_per_second": 15042006398.667864
     },
     {
       "name": "BM_Simd<Metric::L2>/768",
@@ -101,11 +105,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6351914,
-      "real_time": 1.1020788382674627e+02,
-      "cpu_time": 1.1020662433401947e+02,
+      "iterations": 7455057,
+      "real_time": 94.04222194454684,
+      "cpu_time": 93.97151490592223,
       "time_unit": "ns",
-      "items_per_second": 6.9687281017909517e+09
+      "items_per_second": 8172689359.843442
     },
     {
       "name": "BM_Simd<Metric::L2>/1536",
@@ -116,11 +120,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2579038,
-      "real_time": 2.7648791260130690e+02,
-      "cpu_time": 2.7642283673214592e+02,
+      "iterations": 2947344,
+      "real_time": 237.36649268002856,
+      "cpu_time": 237.1894831414315,
       "time_unit": "ns",
-      "items_per_second": 5.5567044248532400e+09
+      "items_per_second": 6475835183.14812
     },
     {
       "name": "BM_Scalar<Metric::Cosine>/128",
@@ -131,11 +135,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 12011188,
-      "real_time": 5.8737084697902660e+01,
-      "cpu_time": 5.8708597351069628e+01,
+      "iterations": 15842947,
+      "real_time": 44.31804890805386,
+      "cpu_time": 44.28254415040337,
       "time_unit": "ns",
-      "items_per_second": 2.1802598899540548e+09
+      "items_per_second": 2890529495.4430494
     },
     {
       "name": "BM_Scalar<Metric::Cosine>/768",
@@ -146,11 +150,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 1581914,
-      "real_time": 4.4367990795608472e+02,
-      "cpu_time": 4.4366191841023016e+02,
+      "iterations": 1926888,
+      "real_time": 363.42676221569684,
+      "cpu_time": 363.14980424394184,
       "time_unit": "ns",
-      "items_per_second": 1.7310478274808159e+09
+      "items_per_second": 2114829723.2293274
     },
     {
       "name": "BM_Scalar<Metric::Cosine>/1536",
@@ -161,11 +165,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 767721,
-      "real_time": 9.1233078159128399e+02,
-      "cpu_time": 9.1222853093767048e+02,
+      "iterations": 916566,
+      "real_time": 763.1518079468487,
+      "cpu_time": 762.5855639419306,
       "time_unit": "ns",
-      "items_per_second": 1.6837885989173801e+09
+      "items_per_second": 2014200206.0203743
     },
     {
       "name": "BM_Simd<Metric::Cosine>/128",
@@ -176,11 +180,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 51998990,
-      "real_time": 1.3459721370392989e+01,
-      "cpu_time": 1.3458953721985752e+01,
+      "iterations": 60453749,
+      "real_time": 11.580550761262598,
+      "cpu_time": 11.571457710587982,
       "time_unit": "ns",
-      "items_per_second": 9.5103975126169548e+09
+      "items_per_second": 11061700539.49892
     },
     {
       "name": "BM_Simd<Metric::Cosine>/768",
@@ -191,11 +195,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 5730471,
-      "real_time": 1.2153113894189545e+02,
-      "cpu_time": 1.2150519564622176e+02,
+      "iterations": 6733748,
+      "real_time": 104.18955520829483,
+      "cpu_time": 104.10101476918959,
       "time_unit": "ns",
-      "items_per_second": 6.3207173645161009e+09
+      "items_per_second": 7377449698.283846
     },
     {
       "name": "BM_Simd<Metric::Cosine>/1536",
@@ -206,11 +210,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2399726,
-      "real_time": 2.9288156221779678e+02,
-      "cpu_time": 2.9257548570128381e+02,
+      "iterations": 2715062,
+      "real_time": 257.73102344937814,
+      "cpu_time": 257.52524251748207,
       "time_unit": "ns",
-      "items_per_second": 5.2499271985084839e+09
+      "items_per_second": 5964463852.1046295
     },
     {
       "name": "BM_Scalar<Metric::InnerProduct>/128",
@@ -221,11 +225,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 25321859,
-      "real_time": 2.7416834129547162e+01,
-      "cpu_time": 2.7395224023639074e+01,
+      "iterations": 29730556,
+      "real_time": 23.54870470639401,
+      "cpu_time": 23.53067329114198,
       "time_unit": "ns",
-      "items_per_second": 4.6723472635065899e+09
+      "items_per_second": 5439708350.724713
     },
     {
       "name": "BM_Scalar<Metric::InnerProduct>/768",
@@ -236,11 +240,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2313614,
-      "real_time": 3.0373508715304462e+02,
-      "cpu_time": 3.0339330588421433e+02,
+      "iterations": 2505064,
+      "real_time": 279.3136558621772,
+      "cpu_time": 279.10424643841475,
       "time_unit": "ns",
-      "items_per_second": 2.5313676508508601e+09
+      "items_per_second": 2751660033.1247973
     },
     {
       "name": "BM_Scalar<Metric::InnerProduct>/1536",
@@ -251,11 +255,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 1028247,
-      "real_time": 6.8490194942818073e+02,
-      "cpu_time": 6.8434529835730109e+02,
+      "iterations": 1090275,
+      "real_time": 642.4066561298425,
+      "cpu_time": 641.9242851574139,
       "time_unit": "ns",
-      "items_per_second": 2.2444809713561363e+09
+      "items_per_second": 2392805562.144045
     },
     {
       "name": "BM_Simd<Metric::InnerProduct>/128",
@@ -266,11 +270,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 68240753,
-      "real_time": 1.0313661724266572e+01,
-      "cpu_time": 1.0305997063074610e+01,
+      "iterations": 80652595,
+      "real_time": 8.56879589561514,
+      "cpu_time": 8.562402734840694,
       "time_unit": "ns",
-      "items_per_second": 1.2419953083298618e+10
+      "items_per_second": 14949074922.528913
     },
     {
       "name": "BM_Simd<Metric::InnerProduct>/768",
@@ -281,11 +285,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6624021,
-      "real_time": 1.0567449002476182e+02,
-      "cpu_time": 1.0559039592416737e+02,
+      "iterations": 7637919,
+      "real_time": 91.6760617658929,
+      "cpu_time": 91.60662740728195,
       "time_unit": "ns",
-      "items_per_second": 7.2733887706184959e+09
+      "items_per_second": 8383672903.767992
     },
     {
       "name": "BM_Simd<Metric::InnerProduct>/1536",
@@ -296,11 +300,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2686429,
-      "real_time": 2.6191543089467780e+02,
-      "cpu_time": 2.6171583168585545e+02,
+      "iterations": 3071347,
+      "real_time": 228.13418672761637,
+      "cpu_time": 227.96577527710116,
       "time_unit": "ns",
-      "items_per_second": 5.8689609646683588e+09
+      "items_per_second": 6737853513.90108
     },
     {
       "name": "BM_ScalarBatch<Metric::L2>/768",
@@ -311,11 +315,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2144,
-      "real_time": 3.2907066221258591e+05,
-      "cpu_time": 3.2905177238806040e+05,
+      "iterations": 2361,
+      "real_time": 297027.5307050127,
+      "cpu_time": 296765.7772130437,
       "time_unit": "ns",
-      "items_per_second": 2.3899947242117805e+09
+      "items_per_second": 2650009065.686278
     },
     {
       "name": "BM_SimdBatch<Metric::L2>/768",
@@ -326,11 +330,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6176,
-      "real_time": 1.1397249430570018e+05,
-      "cpu_time": 1.1396502590673529e+05,
+      "iterations": 7269,
+      "real_time": 96266.98995675686,
+      "cpu_time": 96182.55605998081,
       "time_unit": "ns",
-      "items_per_second": 6.9006433661813622e+09
+      "items_per_second": 8176451450.401981
     },
     {
       "name": "BM_ScalarBatch<Metric::Cosine>/768",
@@ -341,11 +345,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 1529,
-      "real_time": 4.5692854810035875e+05,
-      "cpu_time": 4.5666252452583541e+05,
+      "iterations": 1881,
+      "real_time": 372722.5544903297,
+      "cpu_time": 372394.47102604987,
       "time_unit": "ns",
-      "items_per_second": 1.7221294889843934e+09
+      "items_per_second": 2111825124.1302323
     },
     {
       "name": "BM_SimdBatch<Metric::Cosine>/768",
@@ -356,11 +360,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 5635,
-      "real_time": 1.2487219754001580e+05,
-      "cpu_time": 1.2477959183673488e+05,
+      "iterations": 6500,
+      "real_time": 109415.91030971792,
+      "cpu_time": 108655.0769230772,
       "time_unit": "ns",
-      "items_per_second": 6.3025691014359913e+09
+      "items_per_second": 7237876243.525719
     },
     {
       "name": "BM_ScalarBatch<Metric::InnerProduct>/768",
@@ -371,11 +375,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2247,
-      "real_time": 3.1354995552180184e+05,
-      "cpu_time": 3.1322963951935776e+05,
+      "iterations": 2454,
+      "real_time": 286506.11247295234,
+      "cpu_time": 286255.50122249353,
       "time_unit": "ns",
-      "items_per_second": 2.5107202536987185e+09
+      "items_per_second": 2747307900.2549605
     },
     {
       "name": "BM_SimdBatch<Metric::InnerProduct>/768",
@@ -386,206 +390,251 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6429,
-      "real_time": 1.0975408947987919e+05,
-      "cpu_time": 1.0968470990822818e+05,
+      "iterations": 7479,
+      "real_time": 93873.22837292729,
+      "cpu_time": 93788.07327182719,
       "time_unit": "ns",
-      "items_per_second": 7.1699328070247707e+09
+      "items_per_second": 8385202644.270919
+    },
+    {
+      "name": "BM_SimdBatch<Metric::L2>/768",
+      "family_index": 13,
+      "per_family_instance_index": 0,
+      "run_name": "BM_SimdBatch<Metric::L2>/768",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 7283,
+      "real_time": 96213.13909195876,
+      "cpu_time": 96125.36042839501,
+      "time_unit": "ns",
+      "items_per_second": 8181316527.658933
+    },
+    {
+      "name": "BM_SimdBatch<Metric::Cosine>/768",
+      "family_index": 15,
+      "per_family_instance_index": 0,
+      "run_name": "BM_SimdBatch<Metric::Cosine>/768",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 6527,
+      "real_time": 107098.26490060662,
+      "cpu_time": 106999.08074153567,
+      "time_unit": "ns",
+      "items_per_second": 7349894920.122591
+    },
+    {
+      "name": "BM_SimdBatch<Metric::InnerProduct>/768",
+      "family_index": 17,
+      "per_family_instance_index": 0,
+      "run_name": "BM_SimdBatch<Metric::InnerProduct>/768",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 7445,
+      "real_time": 93961.12598990115,
+      "cpu_time": 93880.0537273339,
+      "time_unit": "ns",
+      "items_per_second": 8376987110.426252
     },
     {
       "name": "BM_Scalar<Metric::L2>/7",
-      "family_index": 12,
+      "family_index": 18,
       "per_family_instance_index": 0,
       "run_name": "BM_Scalar<Metric::L2>/7",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 350655726,
-      "real_time": 1.8341324391673683e+00,
-      "cpu_time": 1.8340581724879610e+00,
+      "iterations": 401728581,
+      "real_time": 1.7550586175602259,
+      "cpu_time": 1.7537363118309008,
       "time_unit": "ns",
-      "items_per_second": 3.8166728324130888e+09
+      "items_per_second": 3991478053.329465
     },
     {
       "name": "BM_Scalar<Metric::L2>/769",
-      "family_index": 12,
+      "family_index": 18,
       "per_family_instance_index": 1,
       "run_name": "BM_Scalar<Metric::L2>/769",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2129556,
-      "real_time": 3.2596722414033445e+02,
-      "cpu_time": 3.2592662508053257e+02,
+      "iterations": 2410535,
+      "real_time": 290.8289205551169,
+      "cpu_time": 290.6213765823766,
       "time_unit": "ns",
-      "items_per_second": 2.3594267568965540e+09
+      "items_per_second": 2646054495.5199704
     },
     {
       "name": "BM_Simd<Metric::L2>/7",
-      "family_index": 13,
+      "family_index": 19,
       "per_family_instance_index": 0,
       "run_name": "BM_Simd<Metric::L2>/7",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 351955111,
-      "real_time": 1.9020202555071763e+00,
-      "cpu_time": 1.9012651871959829e+00,
+      "iterations": 471056917,
+      "real_time": 1.4831808190870917,
+      "cpu_time": 1.482062941451294,
       "time_unit": "ns",
-      "items_per_second": 3.6817588872616525e+09
+      "items_per_second": 4723146233.685141
     },
     {
       "name": "BM_Simd<Metric::L2>/769",
-      "family_index": 13,
+      "family_index": 19,
       "per_family_instance_index": 1,
       "run_name": "BM_Simd<Metric::L2>/769",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6318260,
-      "real_time": 1.1085207794101987e+02,
-      "cpu_time": 1.1068981016925525e+02,
+      "iterations": 7391920,
+      "real_time": 94.78727001890172,
+      "cpu_time": 94.7112522862807,
       "time_unit": "ns",
-      "items_per_second": 6.9473422966768646e+09
+      "items_per_second": 8119415396.130208
     },
     {
       "name": "BM_SimdUnaligned<Metric::L2>/128",
-      "family_index": 14,
+      "family_index": 20,
       "per_family_instance_index": 0,
       "run_name": "BM_SimdUnaligned<Metric::L2>/128",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 66148816,
-      "real_time": 1.0632008768635929e+01,
-      "cpu_time": 1.0624785786037396e+01,
+      "iterations": 79677647,
+      "real_time": 8.771324534714354,
+      "cpu_time": 8.76446564743556,
       "time_unit": "ns",
-      "items_per_second": 1.2047301712963634e+10
+      "items_per_second": 14604427143.536373
     },
     {
       "name": "BM_SimdUnaligned<Metric::L2>/768",
-      "family_index": 14,
+      "family_index": 20,
       "per_family_instance_index": 1,
       "run_name": "BM_SimdUnaligned<Metric::L2>/768",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6204464,
-      "real_time": 1.1716147029614183e+02,
-      "cpu_time": 1.1329020524577105e+02,
+      "iterations": 7407329,
+      "real_time": 94.42296946586156,
+      "cpu_time": 94.35087870405063,
       "time_unit": "ns",
-      "items_per_second": 6.7790503012498360e+09
+      "items_per_second": 8139828802.32602
     },
     {
       "name": "BM_SimdUnaligned<Metric::L2>/1536",
-      "family_index": 14,
+      "family_index": 20,
       "per_family_instance_index": 2,
       "run_name": "BM_SimdUnaligned<Metric::L2>/1536",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2492363,
-      "real_time": 2.8172615013455891e+02,
-      "cpu_time": 2.8171698905817533e+02,
+      "iterations": 2931778,
+      "real_time": 238.71161390933497,
+      "cpu_time": 238.52999783748996,
       "time_unit": "ns",
-      "items_per_second": 5.4522803368554096e+09
+      "items_per_second": 6439441638.055411
     },
     {
       "name": "BM_SimdUnaligned<Metric::Cosine>/128",
-      "family_index": 15,
+      "family_index": 21,
       "per_family_instance_index": 0,
       "run_name": "BM_SimdUnaligned<Metric::Cosine>/128",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 52114742,
-      "real_time": 1.3416681122042442e+01,
-      "cpu_time": 1.3415052500883515e+01,
+      "iterations": 60210392,
+      "real_time": 11.758137747882119,
+      "cpu_time": 11.750147715364506,
       "time_unit": "ns",
-      "items_per_second": 9.5415206158581886e+09
+      "items_per_second": 10893480073.669802
     },
     {
       "name": "BM_SimdUnaligned<Metric::Cosine>/768",
-      "family_index": 15,
+      "family_index": 21,
       "per_family_instance_index": 1,
       "run_name": "BM_SimdUnaligned<Metric::Cosine>/768",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 5658898,
-      "real_time": 1.2271126675655970e+02,
-      "cpu_time": 1.2270198190531110e+02,
+      "iterations": 6643572,
+      "real_time": 105.61630731216455,
+      "cpu_time": 105.53103059619183,
       "time_unit": "ns",
-      "items_per_second": 6.2590676048954468e+09
+      "items_per_second": 7277480335.984835
     },
     {
       "name": "BM_SimdUnaligned<Metric::Cosine>/1536",
-      "family_index": 15,
+      "family_index": 21,
       "per_family_instance_index": 2,
       "run_name": "BM_SimdUnaligned<Metric::Cosine>/1536",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2338517,
-      "real_time": 2.9914843815817773e+02,
-      "cpu_time": 2.9913316858504652e+02,
+      "iterations": 2676772,
+      "real_time": 261.98852274410524,
+      "cpu_time": 261.78359606272096,
       "time_unit": "ns",
-      "items_per_second": 5.1348367928088856e+09
+      "items_per_second": 5867441746.166512
     },
     {
       "name": "BM_SimdUnaligned<Metric::InnerProduct>/128",
-      "family_index": 16,
+      "family_index": 22,
       "per_family_instance_index": 0,
       "run_name": "BM_SimdUnaligned<Metric::InnerProduct>/128",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 67404262,
-      "real_time": 1.0374241987808068e+01,
-      "cpu_time": 1.0373453832934114e+01,
+      "iterations": 80490301,
+      "real_time": 8.663210453155724,
+      "cpu_time": 8.656111249975257,
       "time_unit": "ns",
-      "items_per_second": 1.2339188284004288e+10
+      "items_per_second": 14787240633.069021
     },
     {
       "name": "BM_SimdUnaligned<Metric::InnerProduct>/768",
-      "family_index": 16,
+      "family_index": 22,
       "per_family_instance_index": 1,
       "run_name": "BM_SimdUnaligned<Metric::InnerProduct>/768",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 6487669,
-      "real_time": 1.0719326419241433e+02,
-      "cpu_time": 1.0708730670445726e+02,
+      "iterations": 7596640,
+      "real_time": 92.03717590929857,
+      "cpu_time": 91.96552686450904,
       "time_unit": "ns",
-      "items_per_second": 7.1717183262396288e+09
+      "items_per_second": 8350955256.652625
     },
     {
       "name": "BM_SimdUnaligned<Metric::InnerProduct>/1536",
-      "family_index": 16,
+      "family_index": 22,
       "per_family_instance_index": 2,
       "run_name": "BM_SimdUnaligned<Metric::InnerProduct>/1536",
       "run_type": "iteration",
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 2626780,
-      "real_time": 2.6600613019465476e+02,
-      "cpu_time": 2.6576264475898120e+02,
+      "iterations": 3058024,
+      "real_time": 229.4237769217794,
+      "cpu_time": 229.2588285768826,
       "time_unit": "ns",
-      "items_per_second": 5.7795932960894136e+09
+      "items_per_second": 6699851035.332747
     }
   ]
 }

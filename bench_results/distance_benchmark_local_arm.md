@@ -1,6 +1,6 @@
 # Distance Compute Benchmark Summary
 
-**Platform:** Apple Silicon (ARM aarch64)
+**Platform:** Apple M5 Pro (ARM aarch64)
 **Build:** Release (-O3, -march=native)
 
 AVX2 results will be added after x86 CI runs (trigger `bench.yml` manually).
@@ -8,9 +8,9 @@ AVX2 results will be added after x86 CI runs (trigger `bench.yml` manually).
 ## How to reproduce
 
 ```bash
-cmake -B build -DVECTORDB_BENCH=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target bench_distance
-./build/bench/bench_distance --benchmark_out=bench_results/distance_raw.json --benchmark_out_format=json
+cmake -B build_release -DVECTORDB_BENCH=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build_release --target bench_distance
+./build_release/bench/bench_distance --benchmark_out=bench_results/day5_full_local_arm.json --benchmark_out_format=json
 ```
 
 ---
@@ -19,15 +19,15 @@ cmake --build build --target bench_distance
 
 | Metric | dim | Scalar (ns) | NEON (ns) | Speedup |
 |--------|-----|-------------|-----------|---------|
-| L2 | 128 | 29.6 | 10.7 | 2.8x |
-| L2 | 768 | 311 | 111 | 2.8x |
-| L2 | 1536 | 695 | 279 | 2.5x |
-| Cosine | 128 | 58.7 | 13.5 | 4.3x |
-| Cosine | 768 | 449 | 121 | 3.7x |
-| Cosine | 1536 | 923 | 302 | 3.1x |
-| InnerProduct | 128 | 27.7 | 17.5 | 1.6x |
-| InnerProduct | 768 | 306 | 115 | 2.7x |
-| InnerProduct | 1536 | 694 | 261 | 2.7x |
+| L2 | 128 | 26.7 | 8.52 | 3.1x |
+| L2 | 768 | 290 | 94.0 | 3.1x |
+| L2 | 1536 | 656 | 237 | 2.8x |
+| Cosine | 128 | 44.3 | 11.6 | 3.8x |
+| Cosine | 768 | 363 | 104 | 3.5x |
+| Cosine | 1536 | 763 | 258 | 3.0x |
+| InnerProduct | 128 | 23.5 | 8.57 | 2.7x |
+| InnerProduct | 768 | 279 | 91.7 | 3.0x |
+| InnerProduct | 1536 | 642 | 228 | 2.8x |
 
 Cosine shows the highest speedup because NEON parallelizes all three
 accumulators (dot, na, nb) simultaneously in a single loop pass.
@@ -38,9 +38,9 @@ accumulators (dot, na, nb) simultaneously in a single loop pass.
 
 | Metric | Scalar (ns) | NEON (ns) | Speedup |
 |--------|-------------|-----------|---------|
-| L2 | 332,466 | 113,579 | 2.9x |
-| Cosine | 460,643 | 125,628 | 3.7x |
-| InnerProduct | 331,197 | 117,804 | 2.8x |
+| L2 | 297,028 | 96,267 | 3.1x |
+| Cosine | 372,723 | 109,416 | 3.4x |
+| InnerProduct | 286,506 | 93,873 | 3.1x |
 
 ---
 
@@ -48,9 +48,9 @@ accumulators (dot, na, nb) simultaneously in a single loop pass.
 
 | Metric | No Prefetch (ns) | With Prefetch (ns) | Delta |
 |--------|------------------|--------------------|-------|
-| L2 | 113,999 | 113,604 | ~0% |
-| Cosine | 125,364 | 125,437 | ~0% |
-| InnerProduct | 118,041 | 117,834 | ~0% |
+| L2 | 96,657 | 96,213 | ~0% |
+| Cosine | 107,571 | 107,098 | ~0% |
+| InnerProduct | 94,073 | 93,961 | ~0% |
 
 No measurable benefit on Apple Silicon — the hardware prefetcher already
 detects sequential access patterns and prefetches automatically. Explicit
@@ -64,8 +64,8 @@ NEON processes 4 floats per iteration; remaining elements fall back to scalar.
 
 | dim | Scalar (ns) | NEON (ns) | Note |
 |-----|-------------|-----------|------|
-| 7 | 1.77 | 1.81 | 1 NEON iter + 3 scalar tail — no speedup, slight overhead |
-| 769 | 329 | 111 | 192 NEON iters + 1 scalar tail — speedup preserved (3.0x) |
+| 7 | 1.76 | 1.48 | 1 NEON iter + 3 scalar tail — minimal speedup |
+| 769 | 291 | 94.8 | 192 NEON iters + 1 scalar tail — speedup preserved (3.1x) |
 
 ---
 
@@ -76,12 +76,15 @@ ARM vld1q_f32 supports unaligned loads with no penalty.
 
 | Metric | dim | Aligned (ns) | Unaligned (ns) | Delta |
 |--------|-----|--------------|----------------|-------|
-| L2 | 128 | 10.7 | 10.5 | ~0% |
-| L2 | 768 | 111 | 111 | ~0% |
-| L2 | 1536 | 279 | 281 | ~1% |
-| Cosine | 128 | 13.5 | 13.4 | ~0% |
-| Cosine | 768 | 121 | 123 | ~2% |
-| Cosine | 1536 | 302 | 300 | ~0% |
+| L2 | 128 | 8.52 | 8.77 | ~3% |
+| L2 | 768 | 94.0 | 94.4 | ~0% |
+| L2 | 1536 | 237 | 239 | ~1% |
+| Cosine | 128 | 11.6 | 11.8 | ~2% |
+| Cosine | 768 | 104 | 106 | ~2% |
+| Cosine | 1536 | 258 | 262 | ~2% |
+| InnerProduct | 128 | 8.57 | 8.66 | ~1% |
+| InnerProduct | 768 | 91.7 | 92.0 | ~0% |
+| InnerProduct | 1536 | 228 | 229 | ~0% |
 
 ---
 
@@ -95,5 +98,5 @@ is expected to be higher (~4-6x for L2/IP, ~6-8x for Cosine).
 
 ## Raw JSON files
 
-- `day3_neon.json` — original Day 3 run
-- `day5_full.json` — full run including prefetch comparison
+- `day3_local_arm.json` — Day 3 run (Scalar/NEON single + batch + scalar tail + unaligned)
+- `day5_full_local_arm.json` — full run including prefetch comparison

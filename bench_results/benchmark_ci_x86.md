@@ -4,7 +4,7 @@
 **Date:** 2026-04-01
 **Hardware:** 2 vCPU @ 3242 MHz, L1=32KB, L2=512KB, L3=32MB
 **Build:** Release (-O3)
-**Raw data:** `benchmark-x86.json`
+**Raw data:** `benchmark_ci_x86.json`
 
 ---
 

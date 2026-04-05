@@ -4,7 +4,7 @@
 **Date:** 2026-04-01
 **Hardware:** 2 vCPU @ 2000 MHz, L1=64KB, L2=1MB, L3=128MB
 **Build:** Release (-O3)
-**Raw data:** `benchmark-arm.json`
+**Raw data:** `benchmark_ci_arm.json`
 
 ---
 
