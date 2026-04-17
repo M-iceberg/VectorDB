@@ -75,6 +75,19 @@ public:
 
     size_t size() const;  // live (non-tombstoned) node count
 
+    // Graph inspection — for testing and debugging only.
+    // Returns the number of neighbors node `id` has at `layer`.
+    // Returns 0 if the node doesn't exist or doesn't participate in `layer`.
+    size_t neighbor_count(NodeId id, int layer) const;
+
+    // Returns the highest layer this node participates in.
+    // Returns -1 if the node doesn't exist.
+    int node_layer(NodeId id) const;
+
+    // Returns the neighbor list of node `id` at `layer`.
+    // Returns empty vector if the node doesn't exist or doesn't participate in `layer`.
+    std::vector<NodeId> neighbors_of(NodeId id, int layer) const;
+
     HnswIndex(const HnswIndex&) = delete;
     HnswIndex& operator=(const HnswIndex&) = delete;
 

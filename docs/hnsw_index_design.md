@@ -227,7 +227,20 @@ HnswIndex          ← public API, the only thing callers see
 
 ### HnswIndex
 
-The public-facing class defined in `hnsw_index.h`. Exposes only three operations: `insert`, `search`, `remove`. Internal details are hidden behind a `unique_ptr<Impl>` so changes to the implementation don't force recompilation of callers.
+The public-facing class defined in `hnsw_index.h`. Exposes four operations plus two graph inspection helpers:
+
+| method | purpose |
+|--------|---------|
+| `insert(id, vec)` | add a vector to the index |
+| `search(query, k, ef_search)` | find k approximate nearest neighbors |
+| `remove(id)` | soft-delete a node (tombstone) |
+| `size()` | count of live nodes |
+| `neighbor_count(id, layer)` | number of neighbors node `id` has at `layer` — for testing only |
+| `node_layer(id)` | highest layer node `id` participates in — for testing only |
+
+`neighbor_count` and `node_layer` exist solely for unit tests. The public search/insert/remove API gives no visibility into graph internals — without these helpers, tests would have to infer graph structure indirectly from search results, which is fragile. They are not intended for production use.
+
+Internal details are hidden behind a `unique_ptr<Impl>` so changes to the implementation don't force recompilation of callers.
 
 ### Impl
 

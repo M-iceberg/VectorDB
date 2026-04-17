@@ -346,6 +346,96 @@ TEST(HnswSize, SizeAccurateAfterMixedInsertRemove) {
 }
 
 // ---------------------------------------------------------------------------
+// Day 7: graph structure tests
+// Verify that after insertion, each node has neighbors at layer 0 (except the
+// first node which has nothing to connect to), and that neighbor counts never
+// exceed M0 at layer 0 or M at higher layers.
+// ---------------------------------------------------------------------------
+
+TEST(HnswGraph, AllNodesHaveNeighborsAtLayer0) {
+    // Insert 100 vectors and verify every node except the first has at least
+    // one neighbor at layer 0. The first node has no one to connect to.
+    const size_t dim = 16;
+    HnswConfig cfg = test_cfg(dim);
+    HnswIndex idx(cfg);
+
+    for (NodeId i = 0; i < 100; ++i)
+        idx.insert(i, random_vec(dim, i + 42).data());
+
+    for (NodeId i = 1; i < 100; ++i)
+        EXPECT_GT(idx.neighbor_count(i, 0), 0u) << "node " << i << " has no neighbors at layer 0";
+}
+
+TEST(HnswGraph, NeighborCountsWithinBounds) {
+    // Verify no node exceeds M0 neighbors at layer 0 or M neighbors at higher layers.
+    const size_t dim = 16;
+    HnswConfig cfg = test_cfg(dim);
+    HnswIndex idx(cfg);
+
+    for (NodeId i = 0; i < 100; ++i)
+        idx.insert(i, random_vec(dim, i + 200).data());
+
+    for (NodeId i = 0; i < 100; ++i) {
+        int top_layer = idx.node_layer(i);
+        // layer 0
+        EXPECT_LE(idx.neighbor_count(i, 0), static_cast<size_t>(cfg.M0))
+            << "node " << i << " exceeds M0 at layer 0";
+        // higher layers
+        for (int layer = 1; layer <= top_layer; ++layer)
+            EXPECT_LE(idx.neighbor_count(i, layer), static_cast<size_t>(cfg.M))
+                << "node " << i << " exceeds M at layer " << layer;
+    }
+}
+
+TEST(HnswGraph, NodeLayerIsNonNegative) {
+    const size_t dim = 8;
+    HnswIndex idx(test_cfg(dim));
+    for (NodeId i = 0; i < 100; ++i)
+        idx.insert(i, random_vec(dim, i + 300).data());
+
+    for (NodeId i = 0; i < 100; ++i)
+        EXPECT_GE(idx.node_layer(i), 0) << "node " << i << " has invalid layer";
+}
+
+TEST(HnswGraph, NonExistentNodeReturnsInvalid) {
+    HnswIndex idx(test_cfg());
+    EXPECT_EQ(idx.neighbor_count(999, 0), 0u);
+    EXPECT_EQ(idx.node_layer(999), -1);
+}
+
+TEST(HnswGraph, FirstNodeHasNoNeighbors) {
+    // The first inserted node has nobody to connect to — its neighbor list must be empty.
+    HnswIndex idx(test_cfg(8));
+    idx.insert(0, random_vec(8, 1).data());
+    EXPECT_EQ(idx.neighbor_count(0, 0), 0u);
+}
+
+// TODO Day 8: add EdgesAreBidirectional test once heuristic pruning (Algorithm 4) is
+// implemented. Simple greedy pruning in add_edge does not guarantee bidirectionality:
+// when a neighbor list is full, the reverse edge u←v is skipped if v is not closer than
+// the current worst neighbor. In practice this leaves ~26% of edges one-directional.
+// Heuristic pruning ensures every selected neighbor has room for the reverse edge.
+
+TEST(HnswGraph, NodeHasNeighborListForEachLayer) {
+    // A node assigned layer l must have neighbor lists at layers 0..l.
+    const size_t dim = 8;
+    HnswIndex idx(test_cfg(dim));
+
+    for (NodeId i = 0; i < 100; ++i)
+        idx.insert(i, random_vec(dim, i + 600).data());
+
+    for (NodeId i = 0; i < 100; ++i) {
+        int top = idx.node_layer(i);
+        for (int layer = 0; layer <= top; ++layer)
+            EXPECT_GE(idx.neighbor_count(i, layer), 0u)  // list exists (even if empty for first node)
+                << "node " << i << " missing neighbor list at layer " << layer;
+        // layer above top_layer should return 0 (no list)
+        EXPECT_EQ(idx.neighbor_count(i, top + 1), 0u)
+            << "node " << i << " unexpectedly has neighbors above its top layer";
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Search result ids are all valid inserted nodes
 // ---------------------------------------------------------------------------
 

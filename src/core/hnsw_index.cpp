@@ -366,4 +366,29 @@ size_t HnswIndex::size() const {
     return impl_->live_count;
 }
 
+size_t HnswIndex::neighbor_count(NodeId id, int layer) const {
+    auto& I = *impl_;
+    auto it = I.nodes.find(id);
+    if (it == I.nodes.end()) return 0;
+    const auto& nbrs = it->second.neighbors;
+    if (layer >= static_cast<int>(nbrs.size())) return 0;
+    return nbrs[layer].size();
+}
+
+int HnswIndex::node_layer(NodeId id) const {
+    auto& I = *impl_;
+    auto it = I.nodes.find(id);
+    if (it == I.nodes.end()) return -1;
+    return it->second.layer;
+}
+
+std::vector<NodeId> HnswIndex::neighbors_of(NodeId id, int layer) const {
+    auto& I = *impl_;
+    auto it = I.nodes.find(id);
+    if (it == I.nodes.end()) return {};
+    const auto& nbrs = it->second.neighbors;
+    if (layer >= static_cast<int>(nbrs.size())) return {};
+    return nbrs[layer];
+}
+
 }  // namespace vectordb

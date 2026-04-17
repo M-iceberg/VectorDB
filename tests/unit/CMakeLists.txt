@@ -8,7 +8,7 @@ endfunction()
 vdb_test(test_smoke)
 vdb_test(test_distance)
 
-vdb_test(test_hnsw)   # Day 6: HNSW insert/search/remove/recall
+vdb_test(test_hnsw_ut)   # Day 6-7: HNSW insert/search/remove/recall/graph structure
 
 if(VECTORDB_ARCH STREQUAL "arm")
     vdb_test(test_distance_neon)   # Day 3: NEON vs scalar correctness
