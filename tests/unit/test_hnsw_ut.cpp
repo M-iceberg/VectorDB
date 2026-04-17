@@ -516,6 +516,68 @@ TEST(HnswPruning, RecallMaintainedAfterHeuristicPruning) {
 }
 
 // ---------------------------------------------------------------------------
+// Greedy vs heuristic recall comparison (informational, not a pass/fail test)
+// ---------------------------------------------------------------------------
+
+TEST(HnswPruning, HeuristicVsGreedyRecall) {
+    const size_t N   = 1000;
+    const size_t dim = 32;
+    const int    k   = 10;
+
+    // shared vectors and queries
+    std::vector<std::vector<float>> vecs(N);
+    for (NodeId i = 0; i < N; ++i)
+        vecs[i] = random_vec(dim, i + 20000);
+
+    auto measure_recall = [&](bool use_heuristic) {
+        HnswConfig cfg;
+        cfg.dim             = dim;
+        cfg.M               = 16;
+        cfg.M0              = 32;
+        cfg.ef_construction = 100;
+        cfg.metric          = Metric::L2;
+        cfg.heuristic       = use_heuristic;
+        HnswIndex idx(cfg);
+        for (NodeId i = 0; i < N; ++i)
+            idx.insert(i, vecs[i].data());
+
+        int found = 0;
+        for (int q = 0; q < 100; ++q) {
+            auto query = random_vec(dim, q + 80000);
+
+            std::vector<std::pair<float, NodeId>> bf;
+            for (NodeId i = 0; i < N; ++i) {
+                float d = 0;
+                for (size_t j = 0; j < dim; ++j) {
+                    float diff = query[j] - vecs[i][j];
+                    d += diff * diff;
+                }
+                bf.push_back({d, i});
+            }
+            std::sort(bf.begin(), bf.end());
+            std::unordered_set<NodeId> gt;
+            for (int i = 0; i < k; ++i) gt.insert(bf[i].second);
+
+            auto result = idx.search(query.data(), k, 64);
+            for (auto& [d, id] : result)
+                if (gt.count(id)) ++found;
+        }
+        return static_cast<double>(found) / (100 * k);
+    };
+
+    double recall_greedy    = measure_recall(false);
+    double recall_heuristic = measure_recall(true);
+
+    std::cout << "\n[HeuristicVsGreedyRecall]\n"
+              << "  greedy:    " << recall_greedy    * 100 << "%\n"
+              << "  heuristic: " << recall_heuristic * 100 << "%\n"
+              << "  delta:     +" << (recall_heuristic - recall_greedy) * 100 << "%\n";
+
+    EXPECT_GE(recall_heuristic, recall_greedy)
+        << "heuristic recall should be >= greedy";
+}
+
+// ---------------------------------------------------------------------------
 // Search result ids are all valid inserted nodes
 // ---------------------------------------------------------------------------
 

@@ -53,6 +53,7 @@ struct HnswConfig {
     int    M = 16;              // max neighbors per node (layers 1+)
     int    M0 = 32;             // max neighbors at layer 0 (= 2*M)
     int    ef_construction = 200;
+    bool   heuristic = true;    // true = Algorithm 4 diversity heuristic; false = greedy (for comparison only)
 };
 
 // HNSW approximate nearest-neighbor index.

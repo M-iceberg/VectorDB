@@ -192,6 +192,12 @@ struct HnswIndex::Impl {
         for (auto& [d_q_e, e] : candidates) {
             if (static_cast<int>(result.size()) >= M_max) break;
 
+            if (!cfg.heuristic) {
+                // Greedy: take the M_max closest, no diversity check.
+                result.push_back(e);
+                continue;
+            }
+
             // Diversity check: admit e only if no already-selected neighbor r is
             // closer to e than q is. If r is closer to e than q is, r already
             // covers e's direction — e would be a redundant neighbor.
