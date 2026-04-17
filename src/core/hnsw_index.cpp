@@ -168,21 +168,41 @@ struct HnswIndex::Impl {
         return result;
     }
 
-    // Picks the final M_max neighbors to connect from the ef_construction candidates
-    // returned by search_layer. candidates is already sorted ascending by distance,
-    // so this just takes the first M_max entries.
-    // Simple greedy selection — sufficient for correctness; the full diversity
-    // heuristic from Algorithm 4 of the paper (Day 8) selects more spread-out neighbors
-    // to improve graph connectivity and recall, but is not yet implemented.
+    // Algorithm 4 (Malkov & Yashunin 2018): heuristic neighbor selection.
+    //
+    // Simple greedy selection (take the M_max closest) tends to cluster all neighbors
+    // in the same direction — if there are 50 vectors in one dense region and 5 spread
+    // around, greedy fills the list with the dense cluster and misses the spread-out ones.
+    // This hurts recall: searches coming from different directions can't navigate through.
+    //
+    // The heuristic adds a diversity check: a candidate e is admitted only if it is
+    // closer to q than to any already-selected neighbor r. If dist(e, r) < dist(e, q)
+    // for some r, then r already "covers" the direction of e — adding e would be
+    // redundant and waste a slot. This forces selected neighbors to span different
+    // directions in vector space, improving graph connectivity and recall.
+    //
+    // candidates must be sorted ascending by distance to q.
     std::vector<NodeId> select_neighbors(
         const std::vector<std::pair<float, NodeId>>& candidates,
         int M_max) const
     {
         std::vector<NodeId> result;
-        result.reserve(std::min(M_max, static_cast<int>(candidates.size())));
-        for (auto& [d, id] : candidates) {
+        result.reserve(M_max);
+
+        for (auto& [d_q_e, e] : candidates) {
             if (static_cast<int>(result.size()) >= M_max) break;
-            result.push_back(id);
+
+            // Diversity check: admit e only if no already-selected neighbor r is
+            // closer to e than q is. If r is closer to e than q is, r already
+            // covers e's direction — e would be a redundant neighbor.
+            bool dominated = false;
+            for (NodeId r : result) {
+                if (dist(e, r) < d_q_e) {
+                    dominated = true;
+                    break;
+                }
+            }
+            if (!dominated) result.push_back(e);
         }
         return result;
     }
@@ -190,28 +210,28 @@ struct HnswIndex::Impl {
     // Adds a bidirectional edge between u and v at `layer`: both u→v and v→u.
     // Bidirectional edges are required so the graph stays navigable from any direction.
     //
-    // If a neighbor list is already full (>= M_max), simple pruning is applied:
-    // find the current farthest neighbor and replace it with `to` if `to` is closer.
-    // This keeps each node's neighbor count within M_max while preferring closer neighbors.
-    //
-    // TODO Day 8: replace this pruning with the full heuristic from Algorithm 4 of the
-    // paper, which selects more diverse neighbors (not just the closest) to improve
-    // graph connectivity and recall.
+    // If a neighbor list is already full (>= M_max), heuristic pruning is applied:
+    // build a candidate set from (existing neighbors ∪ new node), run select_neighbors
+    // to pick the best M_max diverse subset, and replace the neighbor list.
+    // This keeps each node's neighbor count within M_max while selecting diverse neighbors
+    // rather than just the closest ones.
     void add_edge(NodeId u, NodeId v, int layer, int M_max) {
         auto add_one = [&](NodeId from, NodeId to) {
             auto& nbrs = nodes[from].neighbors[layer];
             if (static_cast<int>(nbrs.size()) < M_max) {
                 nbrs.push_back(to);
             } else {
-                // Replace the farthest existing neighbor if `to` is closer.
-                float d_to = dist(from, to);
-                float worst_d = -1.0f;
-                size_t worst_i = 0;
-                for (size_t i = 0; i < nbrs.size(); ++i) {
-                    float d = dist(from, nbrs[i]);
-                    if (d > worst_d) { worst_d = d; worst_i = i; }
-                }
-                if (d_to < worst_d) nbrs[worst_i] = to;
+                // List is full — rebuild with heuristic pruning.
+                // Include the new candidate alongside existing neighbors so it gets
+                // a fair chance to displace a redundant neighbor.
+                std::vector<std::pair<float, NodeId>> candidates;
+                candidates.reserve(nbrs.size() + 1);
+                for (NodeId n : nbrs)
+                    candidates.push_back({dist(from, n), n});
+                candidates.push_back({dist(from, to), to});
+                std::sort(candidates.begin(), candidates.end());
+
+                nbrs = select_neighbors(candidates, M_max);
             }
         };
         add_one(u, v);
@@ -275,7 +295,7 @@ void HnswIndex::insert(NodeId id, const float* vec) {
         // beam search to find the ef_construction closest nodes to the new vector at this level.
         auto candidates = I.search_layer(vec, entry_point, I.cfg.ef_construction, level);
 
-        // pick the best max_neighbors from the candidates to become the new node's neighbors.
+        // pick the best max_neighbors diverse candidates (heuristic pruning, Algorithm 4).
         auto neighbors = I.select_neighbors(candidates, max_neighbors);
 
         // ensure the node's neighbor list is sized for this level before connecting edges.

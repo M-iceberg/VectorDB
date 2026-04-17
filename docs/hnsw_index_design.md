@@ -189,6 +189,53 @@ C and W each solve a different problem:
 
 The key is that C controls exploration order and W controls termination and result quality. Together they guarantee: no close node is skipped, and the result set is always the best `ef` nodes seen so far.
 
+## Select Neighbors (`select_neighbors`)
+
+`select_neighbors` is called during insert to pick which candidates become the new node's neighbors. It runs after `search_layer` returns the `ef_construction` closest candidates.
+
+**Greedy (what we had before):** take the M closest candidates, sorted by distance. Simple, but tends to cluster all neighbors in the same direction — if there are 50 vectors in one dense region, greedy fills the list with that cluster and ignores spread-out nodes. Searches coming from other directions then can't navigate through.
+
+**Heuristic (Algorithm 4, Malkov & Yashunin 2018):** iterate candidates in distance order, admit each one only if it is not "dominated" by an already-selected neighbor.
+
+A candidate `e` is dominated if some already-selected neighbor `r` satisfies:
+
+```
+dist(e, r) < dist(e, q)
+```
+
+meaning `e` is closer to `r` than to the query `q`. In that case, `r` already covers `e`'s direction — selecting `e` would be redundant. Skip it and look for a candidate in a different direction instead.
+
+**Example:** q has 5 candidates at distances 1.0, 1.1, 1.2, 2.0, 3.0 (M=3):
+
+- Greedy picks A, B, C (the three closest) — all in the same direction.
+- Heuristic picks A, then skips B and C (both dominated by A), then picks D and E (different directions).
+
+```
+Greedy result:    {A, B, C}  — clustered
+Heuristic result: {A, D, E}  — spread out
+```
+
+The heuristic costs more at insert time (O(M²) extra distance calls per edge) but produces a more connected graph that gives better recall at search time.
+
+**One node per direction.** Because candidates are evaluated in distance order and already-selected neighbors are never replaced, each "direction" contributes at most one node to the result. Once `r` is selected, every later candidate closer to `r` than to `q` is dominated and skipped. Closer candidates are evaluated first, so the nearest node in each direction always wins the slot — a farther node in the same direction cannot displace it.
+
+## Add Edge (`add_edge`)
+
+`add_edge(u, v, layer, M_max)` creates a bidirectional edge between `u` and `v` at a given layer. It calls an inner helper `add_one(from, to)` twice — once for u→v and once for v→u.
+
+**When the neighbor list is not full:** just append `to` directly.
+
+**When the neighbor list is full (>= M_max):** the new node needs to compete for a slot. The approach:
+
+1. Build a candidate set: existing neighbors of `from` + the new node `to`, each with their distance to `from`
+2. Sort by distance
+3. Run `select_neighbors` heuristic to pick the best M_max diverse subset
+4. Replace the neighbor list with the result
+
+This means a new node can displace an existing neighbor if the heuristic judges the new combination to be more diverse. Conversely, the new node may not make it in if it is dominated by an existing neighbor.
+
+**Bidirectionality is not guaranteed.** `add_one` runs independently for each direction. When processing v→u, if `u` is dominated by one of v's existing neighbors in the heuristic, the reverse edge is dropped. This is an accepted tradeoff — hnswlib and faiss handle it the same way, relying on a sufficiently large `ef_search` to compensate for the reduced connectivity.
+
 ## Delete (Tombstone)
 
 Deleting a node just sets `tombstone = true` and decrements `live_count`. The node stays in the graph and can still be traversed as a routing intermediary — its edges are not removed. Search skips tombstoned nodes in the final result but may still pass through them to reach live nodes.

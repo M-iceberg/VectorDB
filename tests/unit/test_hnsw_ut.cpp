@@ -410,11 +410,11 @@ TEST(HnswGraph, FirstNodeHasNoNeighbors) {
     EXPECT_EQ(idx.neighbor_count(0, 0), 0u);
 }
 
-// TODO Day 8: add EdgesAreBidirectional test once heuristic pruning (Algorithm 4) is
-// implemented. Simple greedy pruning in add_edge does not guarantee bidirectionality:
-// when a neighbor list is full, the reverse edge u←v is skipped if v is not closer than
-// the current worst neighbor. In practice this leaves ~26% of edges one-directional.
-// Heuristic pruning ensures every selected neighbor has room for the reverse edge.
+// Note: bidirectionality is not fully guaranteed by the current implementation.
+// add_edge runs select_neighbors independently for u→v and v→u. If u is dominated
+// by an existing neighbor of v in the heuristic, the reverse edge v→u is not added.
+// This is an accepted tradeoff: hnswlib and faiss also allow one-directional edges,
+// relying on a larger ef_search to compensate for reduced connectivity.
 
 TEST(HnswGraph, NodeHasNeighborListForEachLayer) {
     // A node assigned layer l must have neighbor lists at layers 0..l.
@@ -433,6 +433,86 @@ TEST(HnswGraph, NodeHasNeighborListForEachLayer) {
         EXPECT_EQ(idx.neighbor_count(i, top + 1), 0u)
             << "node " << i << " unexpectedly has neighbors above its top layer";
     }
+}
+
+// ---------------------------------------------------------------------------
+// HnswPruning: heuristic pruning (Algorithm 4) correctness
+// ---------------------------------------------------------------------------
+
+// Verify neighbor counts stay within M/M0 bounds after 10K inserts.
+// This is stronger than the HnswGraph version (100 nodes) because at 10K,
+// neighbor lists fill up and pruning is exercised on every insert.
+TEST(HnswPruning, NeighborCountsWithinBoundsLargeGraph) {
+    const size_t dim = 32;
+    HnswConfig cfg;
+    cfg.dim            = dim;
+    cfg.M              = 16;
+    cfg.M0             = 32;
+    cfg.ef_construction = 100;
+    cfg.metric         = Metric::L2;
+    HnswIndex idx(cfg);
+
+    for (NodeId i = 0; i < 10000; ++i)
+        idx.insert(i, random_vec(dim, i).data());
+
+    for (NodeId i = 0; i < 10000; ++i) {
+        int top = idx.node_layer(i);
+        EXPECT_LE(idx.neighbor_count(i, 0), static_cast<size_t>(cfg.M0))
+            << "node " << i << " exceeds M0 at layer 0";
+        for (int layer = 1; layer <= top; ++layer)
+            EXPECT_LE(idx.neighbor_count(i, layer), static_cast<size_t>(cfg.M))
+                << "node " << i << " exceeds M at layer " << layer;
+    }
+}
+
+// Heuristic pruning should select diverse neighbors and maintain or improve recall
+// compared to simple greedy. Verify recall is still >= 90% after switching.
+TEST(HnswPruning, RecallMaintainedAfterHeuristicPruning) {
+    const size_t N = 500;
+    const size_t dim = 32;
+    HnswConfig cfg;
+    cfg.dim             = dim;
+    cfg.M               = 16;
+    cfg.M0              = 32;
+    cfg.ef_construction = 100;
+    cfg.metric          = Metric::L2;
+    HnswIndex idx(cfg);
+
+    std::vector<std::vector<float>> vecs(N);
+    for (NodeId i = 0; i < N; ++i) {
+        vecs[i] = random_vec(dim, i + 7000);
+        idx.insert(i, vecs[i].data());
+    }
+
+    const int k = 10;
+    int total_found = 0, total_possible = 0;
+
+    for (NodeId q = 0; q < 50; ++q) {
+        auto query = random_vec(dim, q + 99000);
+
+        // brute-force ground truth
+        std::vector<std::pair<float, NodeId>> bf;
+        for (NodeId i = 0; i < N; ++i) {
+            float d = 0;
+            for (size_t j = 0; j < dim; ++j) {
+                float diff = query[j] - vecs[i][j];
+                d += diff * diff;
+            }
+            bf.push_back({d, i});
+        }
+        std::sort(bf.begin(), bf.end());
+
+        std::unordered_set<NodeId> gt;
+        for (int i = 0; i < k; ++i) gt.insert(bf[i].second);
+
+        auto result = idx.search(query.data(), k, 64);
+        for (auto& [d, id] : result)
+            if (gt.count(id)) ++total_found;
+        total_possible += k;
+    }
+
+    double recall = static_cast<double>(total_found) / total_possible;
+    EXPECT_GE(recall, 0.90) << "recall dropped to " << recall * 100 << "%";
 }
 
 // ---------------------------------------------------------------------------
