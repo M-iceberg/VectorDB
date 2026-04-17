@@ -23,7 +23,7 @@
 
 **ef_search is the main recall vs QPS knob.** Doubling ef_search roughly halves QPS and gains 1-3% recall. QPS measures how many search queries can be processed per second — higher is better.
 
-**M controls graph density.** Higher M means more neighbors per node, which improves recall at low ef_search but increases build time and memory. M=32 shows little improvement over M=16 at this scale.
+**M controls graph density.** Higher M means more neighbors per node, which improves recall at low ef_search but increases build time and memory. At high ef_search, a denser graph becomes slower: beam search expands more neighbors per step, so each search does more distance computations. M=32 at ef_search=128 is ~28% slower than M=8 (1606 vs 2228 QPS) with no recall gain at this scale. M=32 shows little improvement over M=16 and is generally not worth the cost.
 
 **Practical recommendations:**
 - recall ≥ 99%, high throughput: M=16, ef_search=32 → 99.4% recall, 4809 QPS
