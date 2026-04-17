@@ -25,7 +25,9 @@
 #include <gtest/gtest.h>
 #include "core/hnsw_index.h"
 #include "load_sift.h"
+#include <chrono>
 #include <filesystem>
+#include <iomanip>
 #include <unordered_set>
 
 namespace vectordb {
@@ -106,6 +108,72 @@ TEST(SiftRecall, Recall10KSubset) {
               << "  recall@10 = " << recall * 100 << "%\n";
 
     EXPECT_GE(recall, 0.90) << "recall@10 below 90% on SIFT-1M 10K subset";
+}
+
+// Sweep ef_search (16, 32, 64, 128) and M (8, 16, 32) to show recall vs QPS tradeoff.
+// Informational only — prints a table, no pass/fail assertion.
+TEST(SiftRecall, ParameterSweep) {
+    std::string base_path, query_path, gt_path;
+    if (!sift_data_available(base_path, query_path, gt_path))
+        GTEST_SKIP() << "SIFT data not found — skipping parameter sweep.";
+
+    auto base  = tools::load_fvecs(base_path,  10000);
+    auto query = tools::load_fvecs(query_path, 0);
+    auto gt    = tools::load_ivecs(gt_path,    0);
+    const size_t dim = base[0].size();
+    const int k = 10;
+
+    // Helper: compute recall@k and QPS for a given index and ef_search.
+    auto measure = [&](HnswIndex& idx, int ef_search) -> std::pair<double, double> {
+        int found = 0;
+        auto t0 = std::chrono::steady_clock::now();
+        for (size_t q = 0; q < query.size(); ++q) {
+            std::unordered_set<int> gt_set;
+            for (int i = 0; i < k && i < static_cast<int>(gt[q].size()); ++i)
+                gt_set.insert(gt[q][i]);
+            auto result = idx.search(query[q].data(), k, ef_search);
+            for (auto& [d, id] : result)
+                if (gt_set.count(static_cast<int>(id))) ++found;
+        }
+        auto t1 = std::chrono::steady_clock::now();
+        double secs = std::chrono::duration<double>(t1 - t0).count();
+        double recall = static_cast<double>(found) / (query.size() * k);
+        double qps    = query.size() / secs;
+        return {recall, qps};
+    };
+
+    std::cout << "\n[ParameterSweep] 10K base, " << query.size() << " queries, dim=" << dim << "\n";
+    std::cout << std::left
+              << std::setw(6)  << "M"
+              << std::setw(10) << "ef_build"
+              << std::setw(12) << "ef_search"
+              << std::setw(12) << "recall@10"
+              << "QPS\n"
+              << std::string(50, '-') << "\n";
+
+    struct Config { int M, ef_construction; };
+    for (auto [M, ef_c] : std::vector<Config>{{8, 100}, {16, 200}, {32, 200}}) {
+        HnswConfig cfg;
+        cfg.dim             = dim;
+        cfg.M               = M;
+        cfg.M0              = M * 2;
+        cfg.ef_construction = ef_c;
+        cfg.metric          = Metric::L2;
+
+        HnswIndex idx(cfg);
+        for (size_t i = 0; i < base.size(); ++i)
+            idx.insert(static_cast<NodeId>(i), base[i].data());
+
+        for (int ef_search : {16, 32, 64, 128}) {
+            auto [recall, qps] = measure(idx, ef_search);
+            std::cout << std::left
+                      << std::setw(6)  << M
+                      << std::setw(10) << ef_c
+                      << std::setw(12) << ef_search
+                      << std::setw(12) << std::fixed << std::setprecision(1) << recall * 100
+                      << std::fixed << std::setprecision(0) << qps << "\n";
+        }
+    }
 }
 
 }  // namespace
