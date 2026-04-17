@@ -25,6 +25,8 @@
 
 **M controls graph density.** Higher M means more neighbors per node, which improves recall at low ef_search but increases build time and memory. At high ef_search, a denser graph becomes slower: beam search expands more neighbors per step, so each search does more distance computations. M=32 at ef_search=128 is ~28% slower than M=8 (1606 vs 2228 QPS) with no recall gain at this scale. M=32 shows little improvement over M=16 and is generally not worth the cost.
 
+**M and ef_search interact.** When ef_search is large, M has no effect on recall — the beam search already explores enough of the graph to find the true nearest neighbors regardless of density (all configs hit 100% at ef_search=128). M only matters at low ef_search: with ef_search=16, M=8 gives 94.7% while M=32 gives 98.0%. The practical implication: if you need low latency (small ef_search), use a larger M to compensate; if you can afford a larger ef_search, M=8 or M=16 is sufficient.
+
 **Practical recommendations:**
 - recall ≥ 99%, high throughput: M=16, ef_search=32 → 99.4% recall, 4809 QPS
 - maximum recall: ef_search=128 → 100% recall, ~1600 QPS
