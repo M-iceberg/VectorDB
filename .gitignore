@@ -11,3 +11,4 @@ CTestTestfile.cmake
 compile_commands.json
 data/*
 !data/.gitkeep
+data/sift/

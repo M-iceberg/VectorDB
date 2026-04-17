@@ -8,7 +8,13 @@ endfunction()
 vdb_test(test_smoke)
 vdb_test(test_distance)
 
-vdb_test(test_hnsw_ut)   # Day 6-7: HNSW insert/search/remove/recall/graph structure
+vdb_test(test_hnsw_ut)   # Day 6-8: HNSW insert/search/remove/recall/graph structure/pruning
+
+# Day 9: SIFT recall test (skipped if data not present)
+add_executable(test_sift_recall test_sift_recall.cpp)
+target_link_libraries(test_sift_recall PRIVATE
+    vortex_core vortex_storage vortex_server vortex_tools GTest::gtest_main)
+gtest_discover_tests(test_sift_recall)
 
 if(VECTORDB_ARCH STREQUAL "arm")
     vdb_test(test_distance_neon)   # Day 3: NEON vs scalar correctness
