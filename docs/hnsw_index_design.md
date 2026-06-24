@@ -258,6 +258,18 @@ struct HnswNode {
 
 The float vector is stored separately in `Impl::vecs` (a `NodeId → vector<float>` map). This keeps the graph structure compact — `HnswNode` only holds edges, not the large float arrays. Day 13 will replace `vecs` with `VectorFile` for on-disk storage.
 
+## Why the Graph Lives in Memory
+
+HNSW search is a sequence of random hops: start at the entry point, jump to the closest neighbor, then to that node's closest neighbor, and so on. Each hop lands at a node whose location cannot be predicted in advance — it depends entirely on the distance computations from the previous step.
+
+This is a **random access** pattern. If the graph were stored on disk, each hop could trigger a random disk read — ~10ms on spinning disk, ~0.1ms on SSD. A single search with 50 hops would take 500ms on SSD, which is unacceptable for a query latency target of single-digit milliseconds.
+
+In memory, each hop is a pointer dereference — nanoseconds. The entire neighbor traversal for a search is fast enough to be dominated by distance computation, not I/O.
+
+**Vector data is different.** Vectors are stored in a memory-mapped file (VectorFile) because their access pattern is more predictable: beam search only reads vectors for the candidate nodes it is actively evaluating, and the OS page cache handles sequential prefetch. But graph topology — neighbor lists, layer assignments — is too random for disk access to be practical.
+
+The tradeoff: the graph must fit in memory, and it is periodically checkpointed to disk for crash recovery. The WAL covers the gap between checkpoints.
+
 ---
 
 ## Code Structure
