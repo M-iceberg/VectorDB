@@ -92,7 +92,28 @@ public:
     HnswIndex(const HnswIndex&) = delete;
     HnswIndex& operator=(const HnswIndex&) = delete;
 
-private:
+    // -----------------------------------------------------------------------
+    // Serialization support — used by GraphSerializer only.
+    // -----------------------------------------------------------------------
+
+    // Per-node snapshot: everything needed to reconstruct the graph.
+    struct NodeData {
+        NodeId id;
+        int    layer;
+        bool   tombstone;
+        std::vector<float>              vec;        // raw float vector
+        std::vector<std::vector<NodeId>> neighbors; // per-layer neighbor lists
+    };
+
+    // Returns all node data and global graph state for serialization.
+    std::vector<NodeData> snapshot() const;
+    NodeId entry_point_id() const;
+    int    max_layer_val()   const;
+
+    // Restores graph from serialized data, bypassing the normal insert algorithm.
+    // Called by GraphSerializer::deserialize() after constructing an empty index.
+    void restore(NodeId entry_point, int max_layer, size_t live_count,
+                 std::vector<NodeData> nodes);
     // Pimpl (pointer to implementation): all internal state (nodes, vectors,
     // entry point, rng, etc.) is defined in hnsw_index.cpp, not here.
     // This header only forward-declares Impl — callers cannot access or even

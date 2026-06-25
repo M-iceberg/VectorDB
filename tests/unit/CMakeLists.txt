@@ -10,7 +10,8 @@ vdb_test(test_distance)
 
 vdb_test(test_hnsw_ut)   # Day 6-8: HNSW insert/search/remove/recall/graph structure/pruning
 vdb_test(test_wal_ut)         # Day 11-12: WAL append/sync/iterate/CRC/reopen/truncate/replay
-vdb_test(test_vector_file_ut) # Day 13: mmap vector storage append/read/grow/persist
+vdb_test(test_vector_file_ut)    # Day 13: mmap vector storage append/read/grow/persist
+vdb_test(test_graph_serializer_ut) # Day 14: graph checkpoint serialize/deserialize/recall
 
 # Day 9: SIFT recall test (skipped if data not present)
 add_executable(test_sift_recall test_sift_recall.cpp)

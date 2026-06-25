@@ -417,4 +417,46 @@ std::vector<NodeId> HnswIndex::neighbors_of(NodeId id, int layer) const {
     return nbrs[layer];
 }
 
+// ---------------------------------------------------------------------------
+// Serialization support
+// ---------------------------------------------------------------------------
+
+std::vector<HnswIndex::NodeData> HnswIndex::snapshot() const {
+    auto& I = *impl_;
+    std::vector<NodeData> out;
+    out.reserve(I.nodes.size());
+    for (auto& [id, node] : I.nodes) {
+        NodeData nd;
+        nd.id        = node.id;
+        nd.layer     = node.layer;
+        nd.tombstone = node.tombstone;
+        nd.vec       = I.vecs.at(id);
+        nd.neighbors = node.neighbors;
+        out.push_back(std::move(nd));
+    }
+    return out;
+}
+
+NodeId HnswIndex::entry_point_id() const { return impl_->entry_point; }
+int    HnswIndex::max_layer_val()   const { return impl_->max_layer; }
+
+void HnswIndex::restore(NodeId entry_point, int max_layer, size_t live_count,
+                        std::vector<NodeData> nodes) {
+    auto& I = *impl_;
+    if (!I.nodes.empty())
+        throw std::logic_error("HnswIndex::restore called on a non-empty index");
+    I.entry_point = entry_point;
+    I.max_layer   = max_layer;
+    I.live_count  = live_count;
+    for (auto& nd : nodes) {
+        I.vecs[nd.id] = std::move(nd.vec);
+        HnswNode node;
+        node.id        = nd.id;
+        node.layer     = nd.layer;
+        node.tombstone = nd.tombstone;
+        node.neighbors = std::move(nd.neighbors);
+        I.nodes[nd.id] = std::move(node);
+    }
+}
+
 }  // namespace vectordb
