@@ -46,6 +46,7 @@
 #include <cmath>
 #include <queue>
 #include <random>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 
