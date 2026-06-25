@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 #include "storage/wal.h"
 #include "storage/wal_record.h"
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>

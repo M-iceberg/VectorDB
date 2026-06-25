@@ -31,6 +31,7 @@ jobs:
           ./build/tests/unit/test_distance
           ./build/tests/unit/test_distance_neon
           ./build/tests/unit/test_hnsw
+          ./build/tests/unit/test_wal_ut
 
   # -------------------------------------------------------------------------
   # x86 (ubuntu-latest): tests AVX2 path and verifies x86 compilation
@@ -56,3 +57,4 @@ jobs:
           ./build/tests/unit/test_distance
           ./build/tests/unit/test_distance_avx2
           ./build/tests/unit/test_hnsw
+          ./build/tests/unit/test_wal_ut
