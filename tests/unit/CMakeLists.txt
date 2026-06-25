@@ -9,7 +9,8 @@ vdb_test(test_smoke)
 vdb_test(test_distance)
 
 vdb_test(test_hnsw_ut)   # Day 6-8: HNSW insert/search/remove/recall/graph structure/pruning
-vdb_test(test_wal_ut)    # Day 11: WAL append/sync/iterate/CRC/reopen
+vdb_test(test_wal_ut)         # Day 11-12: WAL append/sync/iterate/CRC/reopen/truncate/replay
+vdb_test(test_vector_file_ut) # Day 13: mmap vector storage append/read/grow/persist
 
 # Day 9: SIFT recall test (skipped if data not present)
 add_executable(test_sift_recall test_sift_recall.cpp)
