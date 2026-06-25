@@ -86,43 +86,49 @@ static uint32_t record_crc(const WalRecordHeader& hdr,
 
 struct Wal::Impl {
     std::string path;
-    int         fd      = -1;   // write fd (O_WRONLY | O_CREAT | O_APPEND)
+    std::string base_path;  // path + ".base" — stores base_lsn after truncate_before
+    int         fd       = -1;
     Lsn         next_lsn = 0;
+    Lsn         base_lsn = 0;  // LSN of the first record in the file; >0 after truncate_before
 
-    explicit Impl(const std::string& p) : path(p) {
-        // Scan the existing file (if any) to find next_lsn and truncate any
+    explicit Impl(const std::string& p) : path(p), base_path(p + ".base") {
+        // Read base_lsn from sidecar file if it exists (written by truncate_before).
+        // Without this, iterate() would assign LSN 0 to the first record in the file
+        // even after truncation — making replay(checkpoint_lsn) replay nothing.
+        int bfd = ::open(base_path.c_str(), O_RDONLY);
+        if (bfd >= 0) {
+            ::read(bfd, &base_lsn, sizeof(base_lsn));
+            ::close(bfd);
+        }
+        next_lsn = base_lsn;
+
+        // Scan the existing WAL file (if any) to find next_lsn and truncate any
         // corrupt tail record left by a previous crash.
         int rfd = ::open(path.c_str(), O_RDONLY);
         if (rfd >= 0) {
-            off_t last_good = 0;  // file offset just after the last valid record
+            off_t last_good = 0;
             while (true) {
-                off_t record_start = ::lseek(rfd, 0, SEEK_CUR);
-
                 WalRecordHeader hdr;
                 ssize_t n = ::read(rfd, &hdr, sizeof(hdr));
-                if (n == 0) break;                              // clean EOF
-                if (n < static_cast<ssize_t>(sizeof(hdr))) break;  // truncated header
+                if (n == 0) break;
+                if (n < static_cast<ssize_t>(sizeof(hdr))) break;
 
                 std::vector<uint8_t> payload(hdr.payload_length);
                 n = ::read(rfd, payload.data(), hdr.payload_length);
-                if (n < static_cast<ssize_t>(hdr.payload_length)) break;  // truncated payload
+                if (n < static_cast<ssize_t>(hdr.payload_length)) break;
 
-                // Verify CRC — stop on mismatch (corrupt tail).
                 uint32_t expected = record_crc(hdr, payload.data(), hdr.payload_length);
                 if (hdr.crc32 != expected) break;
 
                 ++next_lsn;
                 last_good = ::lseek(rfd, 0, SEEK_CUR);
-                (void)record_start;
             }
             ::close(rfd);
 
-            // Truncate any incomplete tail record.
             if (::truncate(path.c_str(), last_good) != 0)
                 throw std::runtime_error("Wal: truncate failed: " + path);
         }
 
-        // Open for appending.
         fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (fd < 0)
             throw std::runtime_error("Wal: cannot open for writing: " + path);
@@ -173,15 +179,15 @@ Lsn Wal::append(WalRecordType type, const void* payload, uint32_t length) {
     return I.next_lsn++;
 }
 
-// Calls fdatasync() to flush the write buffer to disk.
+// Calls fsync() to flush the write buffer to disk.
 // On macOS, F_FULLFSYNC is used for stronger durability guarantees.
 void Wal::sync() {
 #ifdef __APPLE__
     if (::fcntl(impl_->fd, F_FULLFSYNC) != 0)
         throw std::runtime_error("Wal: fsync failed");
 #else
-    if (::fdatasync(impl_->fd) != 0)
-        throw std::runtime_error("Wal: fdatasync failed");
+    if (::fsync(impl_->fd) != 0)
+        throw std::runtime_error("Wal: fsync failed");
 #endif
 }
 
@@ -193,7 +199,7 @@ void Wal::iterate(Lsn start_lsn,
     int rfd = ::open(impl_->path.c_str(), O_RDONLY);
     if (rfd < 0) return;  // file doesn't exist yet — nothing to iterate
 
-    Lsn lsn = 0;
+    Lsn lsn = impl_->base_lsn;  // first record in file has this LSN, not 0
     while (true) {
         WalRecordHeader hdr;
         ssize_t n = ::read(rfd, &hdr, sizeof(hdr));
@@ -214,8 +220,112 @@ void Wal::iterate(Lsn start_lsn,
     ::close(rfd);
 }
 
-// TODO Day 12: implement truncate_before (rewrite file keeping only records >= lsn).
-void Wal::truncate_before(Lsn /*lsn*/) {}
+// Removes all records with LSN < lsn from the WAL file.
+// Rewrites the file keeping only records >= lsn, then updates the base_lsn
+// sidecar so iterate() assigns correct LSNs after reopen.
+// Called after a successful checkpoint to bound WAL growth.
+void Wal::truncate_before(Lsn lsn) {
+    auto& I = *impl_;
+    if (lsn <= I.base_lsn) return;  // nothing to do
+
+    // Read all records with logical LSN >= lsn directly from file.
+    struct RawRecord { WalRecordHeader hdr; std::vector<uint8_t> payload; };
+    std::vector<RawRecord> to_keep;
+
+    int rfd = ::open(I.path.c_str(), O_RDONLY);
+    if (rfd >= 0) {
+        Lsn cur = I.base_lsn;
+        while (true) {
+            WalRecordHeader hdr;
+            ssize_t n = ::read(rfd, &hdr, sizeof(hdr));
+            if (n <= 0) break;
+            if (n < static_cast<ssize_t>(sizeof(hdr))) break;
+
+            std::vector<uint8_t> payload(hdr.payload_length);
+            n = ::read(rfd, payload.data(), hdr.payload_length);
+            if (n < static_cast<ssize_t>(hdr.payload_length)) break;
+
+            if (record_crc(hdr, payload.data(), hdr.payload_length) != hdr.crc32) break;
+
+            if (cur >= lsn)
+                to_keep.push_back({hdr, std::move(payload)});
+            ++cur;
+        }
+        ::close(rfd);
+    }
+
+    // Write kept records to a temp file, then atomically rename over the WAL.
+    std::string tmp = I.path + ".tmp";
+    int wfd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (wfd < 0) throw std::runtime_error("Wal: truncate_before: cannot open tmp");
+    for (auto& rec : to_keep) {
+        struct iovec iov[2];
+        iov[0].iov_base = &rec.hdr;
+        iov[0].iov_len  = sizeof(rec.hdr);
+        iov[1].iov_base = rec.payload.data();
+        iov[1].iov_len  = rec.payload.size();
+        if (::writev(wfd, iov, 2) < 0)
+            throw std::runtime_error("Wal: truncate_before: write failed");
+    }
+    // fsync before rename so the data is on disk if we crash after rename.
+    if (::fsync(wfd) != 0)
+        throw std::runtime_error("Wal: truncate_before: fsync tmp failed");
+    ::close(wfd);
+
+    // Write sidecar before rename: if we crash after rename but before the
+    // sidecar write, iterate() would assign wrong LSNs and replay would skip
+    // records that were never checkpointed, causing data loss.
+    // Writing sidecar first means a crash between sidecar and rename leaves
+    // the old WAL file intact — iterate() with the new base_lsn still sees
+    // all records >= lsn, so replay is correct (possibly replaying some
+    // already-checkpointed records, which is safe because replay is idempotent).
+    int bfd = ::open(I.base_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (bfd < 0)
+        throw std::runtime_error("Wal: truncate_before: cannot open sidecar");
+    if (::write(bfd, &lsn, sizeof(lsn)) != sizeof(lsn)) {
+        ::close(bfd);
+        throw std::runtime_error("Wal: truncate_before: sidecar write failed");
+    }
+    if (::fsync(bfd) != 0) {
+        ::close(bfd);
+        throw std::runtime_error("Wal: truncate_before: fsync sidecar failed");
+    }
+    ::close(bfd);
+
+    if (::rename(tmp.c_str(), I.path.c_str()) != 0)
+        throw std::runtime_error("Wal: truncate_before: rename failed");
+
+    I.base_lsn = lsn;
+
+    // Reopen write fd on the new file.
+    ::close(I.fd);
+    I.fd = ::open(I.path.c_str(), O_WRONLY | O_APPEND, 0644);
+    if (I.fd < 0) throw std::runtime_error("Wal: truncate_before: reopen failed");
+}
+
+// Replays WAL records with LSN >= start_lsn, dispatching each to the
+// appropriate callback. Insert payload layout: [node_id: 4B][vec: dim*4B].
+// Delete payload layout: [node_id: 4B]. Checkpoint records are skipped.
+void Wal::replay(Lsn start_lsn,
+                 std::function<void(uint32_t, const float*, size_t)> on_insert,
+                 std::function<void(uint32_t)> on_delete) const {
+    iterate(start_lsn, [&](Lsn, WalRecordType type,
+                            const void* payload, uint32_t len) {
+        if (type == WalRecordType::Insert) {
+            uint32_t id;
+            std::memcpy(&id, payload, sizeof(id));
+            const float* vec = reinterpret_cast<const float*>(
+                static_cast<const uint8_t*>(payload) + sizeof(uint32_t));
+            size_t dim = (len - sizeof(uint32_t)) / sizeof(float);
+            on_insert(id, vec, dim);
+        } else if (type == WalRecordType::Delete) {
+            uint32_t id;
+            std::memcpy(&id, payload, sizeof(id));
+            on_delete(id);
+        }
+        // Checkpoint records are ignored — they only mark truncation points.
+    });
+}
 
 Lsn Wal::current_lsn() const { return impl_->next_lsn; }
 

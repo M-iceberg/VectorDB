@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <vector>
+#include <cmath>
 
 namespace vectordb {
 namespace {
@@ -31,6 +32,8 @@ protected:
     }
     void TearDown() override {
         std::filesystem::remove(path_);
+        std::filesystem::remove(path_ + ".base");
+        std::filesystem::remove(path_ + ".tmp");
     }
 };
 
@@ -191,6 +194,201 @@ TEST_F(WalTest, LargePayloadRoundTrip) {
     ASSERT_EQ(recovered.size(), vec.size());
     for (size_t i = 0; i < vec.size(); ++i)
         EXPECT_FLOAT_EQ(recovered[i], vec[i]);
+}
+
+// ---------------------------------------------------------------------------
+// replay(): insert and delete records are dispatched to the right callbacks
+// ---------------------------------------------------------------------------
+
+TEST_F(WalTest, ReplayInsertAndDelete) {
+    const size_t dim = 4;
+    std::vector<float> vec0 = {1.0f, 2.0f, 3.0f, 4.0f};
+    std::vector<float> vec1 = {5.0f, 6.0f, 7.0f, 8.0f};
+
+    {
+        Wal wal(path_);
+        auto p0 = make_insert_payload(10, vec0.data(), dim);
+        auto p1 = make_insert_payload(20, vec1.data(), dim);
+        auto pd = make_delete_payload(10);
+        wal.append(WalRecordType::Insert, p0.data(), p0.size());
+        wal.append(WalRecordType::Insert, p1.data(), p1.size());
+        wal.append(WalRecordType::Delete, pd.data(), pd.size());
+        wal.sync();
+    }
+
+    Wal wal(path_);
+    std::vector<std::pair<uint32_t, std::vector<float>>> inserts;
+    std::vector<uint32_t> deletes;
+
+    wal.replay(0,
+        [&](uint32_t id, const float* vec, size_t d) {
+            inserts.push_back({id, std::vector<float>(vec, vec + d)});
+        },
+        [&](uint32_t id) {
+            deletes.push_back(id);
+        });
+
+    ASSERT_EQ(inserts.size(), 2u);
+    EXPECT_EQ(inserts[0].first, 10u);
+    EXPECT_EQ(inserts[0].second, vec0);
+    EXPECT_EQ(inserts[1].first, 20u);
+    EXPECT_EQ(inserts[1].second, vec1);
+
+    ASSERT_EQ(deletes.size(), 1u);
+    EXPECT_EQ(deletes[0], 10u);
+}
+
+// ---------------------------------------------------------------------------
+// truncate_before(): removes records before lsn, preserves LSN numbering
+// ---------------------------------------------------------------------------
+
+TEST_F(WalTest, TruncateBeforeRemovesOldRecords) {
+    {
+        Wal wal(path_);
+        for (uint32_t i = 0; i < 5; ++i)
+            wal.append(WalRecordType::Insert, &i, sizeof(i));
+        wal.sync();
+        EXPECT_EQ(wal.current_lsn(), 5u);
+
+        wal.truncate_before(3);
+
+        // LSNs 3 and 4 remain; next append gets LSN 5.
+        EXPECT_EQ(wal.current_lsn(), 5u);
+    }
+
+    // Reopen: base_lsn=3, next_lsn=5 (2 records kept).
+    Wal wal(path_);
+    EXPECT_EQ(wal.current_lsn(), 5u);
+
+    // iterate from 0 sees only records at LSN 3 and 4.
+    std::vector<Lsn> seen;
+    wal.iterate(0, [&](Lsn lsn, WalRecordType, const void*, uint32_t) {
+        seen.push_back(lsn);
+    });
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[0], 3u);
+    EXPECT_EQ(seen[1], 4u);
+}
+
+TEST_F(WalTest, TruncateBeforeNewAppendContinuesLsn) {
+    {
+        Wal wal(path_);
+        for (uint32_t i = 0; i < 3; ++i)
+            wal.append(WalRecordType::Insert, &i, sizeof(i));
+        wal.sync();
+        wal.truncate_before(2);
+    }
+
+    Wal wal(path_);
+    uint32_t v = 99;
+    Lsn lsn = wal.append(WalRecordType::Insert, &v, sizeof(v));
+    EXPECT_EQ(lsn, 3u);  // continues from where it left off
+}
+
+// replay() with start_lsn skips earlier records.
+TEST_F(WalTest, ReplayStartLsn) {
+    const size_t dim = 2;
+    std::vector<float> vec = {1.0f, 2.0f};
+
+    {
+        Wal wal(path_);
+        for (uint32_t i = 0; i < 4; ++i) {
+            auto p = make_insert_payload(i, vec.data(), dim);
+            wal.append(WalRecordType::Insert, p.data(), p.size());
+        }
+        wal.sync();
+    }
+
+    Wal wal(path_);
+    std::vector<uint32_t> ids;
+    wal.replay(2,
+        [&](uint32_t id, const float*, size_t) { ids.push_back(id); },
+        [&](uint32_t) {});
+
+    ASSERT_EQ(ids.size(), 2u);
+    EXPECT_EQ(ids[0], 2u);
+    EXPECT_EQ(ids[1], 3u);
+}
+
+// ---------------------------------------------------------------------------
+// Crash simulation: sidecar written (base_lsn=3) but rename not yet done.
+// Old WAL still has all 5 records. Verifies that post-checkpoint records
+// (old LSN 3 and 4) are not lost — they must appear in replay output.
+// ---------------------------------------------------------------------------
+
+TEST_F(WalTest, CrashAfterSidecarBeforeRename) {
+    const size_t dim = 2;
+    std::vector<float> vec = {1.0f, 2.0f};
+
+    // Write 5 records with node IDs 0..4.
+    {
+        Wal wal(path_);
+        for (uint32_t i = 0; i < 5; ++i) {
+            auto p = make_insert_payload(i, vec.data(), dim);
+            wal.append(WalRecordType::Insert, p.data(), p.size());
+        }
+        wal.sync();
+    }
+
+    // Simulate crash after sidecar write but before rename:
+    // manually write base_lsn=3 to sidecar, leave WAL file unchanged.
+    {
+        uint64_t base = 3;
+        std::ofstream f(path_ + ".base", std::ios::binary | std::ios::trunc);
+        f.write(reinterpret_cast<const char*>(&base), sizeof(base));
+    }
+
+    // Open Wal — old WAL (5 records) + sidecar base_lsn=3.
+    Wal wal(path_);
+
+    // replay from checkpoint_lsn=3 must include node IDs 3 and 4
+    // (the post-checkpoint records). IDs 0,1,2 may also appear (idempotent).
+    std::vector<uint32_t> ids;
+    wal.replay(3,
+        [&](uint32_t id, const float*, size_t) { ids.push_back(id); },
+        [&](uint32_t) {});
+
+    // IDs 3 and 4 must be present — they were not yet checkpointed.
+    EXPECT_NE(std::find(ids.begin(), ids.end(), 3u), ids.end());
+    EXPECT_NE(std::find(ids.begin(), ids.end(), 4u), ids.end());
+}
+
+// ---------------------------------------------------------------------------
+// truncate_before(next_lsn): truncate all records — to_keep is empty.
+// Verifies empty WAL + correct base_lsn on reopen, and that the next
+// append continues from the right LSN.
+// ---------------------------------------------------------------------------
+
+TEST_F(WalTest, TruncateBeforeAllRecords) {
+    {
+        Wal wal(path_);
+        for (uint32_t i = 0; i < 3; ++i)
+            wal.append(WalRecordType::Insert, &i, sizeof(i));
+        wal.sync();
+        EXPECT_EQ(wal.current_lsn(), 3u);
+
+        wal.truncate_before(3);  // truncate everything
+        EXPECT_EQ(wal.current_lsn(), 3u);
+
+        // iterate on empty WAL must return nothing.
+        size_t count = 0;
+        wal.iterate(0, [&](Lsn, WalRecordType, const void*, uint32_t) { ++count; });
+        EXPECT_EQ(count, 0u);
+    }
+
+    // Reopen: empty file + base_lsn=3.
+    Wal wal(path_);
+    EXPECT_EQ(wal.current_lsn(), 3u);
+
+    size_t count = 0;
+    wal.iterate(0, [&](Lsn, WalRecordType, const void*, uint32_t) { ++count; });
+    EXPECT_EQ(count, 0u);
+
+    // Next append must get LSN 3, not 0.
+    uint32_t v = 42;
+    Lsn lsn = wal.append(WalRecordType::Insert, &v, sizeof(v));
+    EXPECT_EQ(lsn, 3u);
+    EXPECT_EQ(wal.current_lsn(), 4u);
 }
 
 }  // namespace

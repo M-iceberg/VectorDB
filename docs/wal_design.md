@@ -113,10 +113,10 @@ The WAL file is a flat sequence of records written one after another, never over
 ```
 
 **Payload formats:**
-- `Insert`: `[node_id: 4B][slot: 4B]` — node id and the VectorFile slot where the vector is stored. The actual vector data lives in VectorFile (memory-mapped on disk); the WAL only records the reference. On recovery, the vector is read from VectorFile by slot.
+- `Insert`: `[node_id: 4B][vec: dim × 4B]` — node id followed by the raw float vector. The full vector is stored in the WAL so recovery is self-contained: the engine can replay an insert purely from the WAL record without reading from VectorFile.
 - `Delete`: `[node_id: 4B]`
 
-Vector data is not stored in the WAL payload because VectorFile is already persistent (memory-mapped file on disk) — it survives crashes independently. The WAL only needs to record which node_id maps to which slot, so the graph can be reconstructed on recovery.
+Storing the full vector in the WAL (rather than just a VectorFile slot reference) preserves strict WAL-first ordering. The alternative — writing to VectorFile first, then recording the slot in the WAL — breaks the invariant: if the process crashes between the VectorFile write and the WAL append, the vector exists on disk but there is no WAL record of it, so recovery has no way to know about it. With the vector in the WAL payload, the WAL is always written first and is the single source of truth for recovery.
 
 The checkpoint LSN is stored in the checkpoint file itself, not in the WAL. Recovery reads the checkpoint file to get the LSN, then calls `iterate(checkpoint_lsn, cb)` to replay only the WAL records after that point.
 
@@ -148,6 +148,12 @@ wal.log:   [LSN 3][LSN 4]   (LSN 0/1/2 removed)
 ```
 
 Both operations are sequential reads — WAL is designed for sequential access only, not random access. For recovery this is fine: replay always starts at `checkpoint_lsn` and reads forward to the end.
+
+**`base_lsn` and the sidecar file:**
+
+After `truncate_before(3)`, the WAL file contains only `[LSN 3][LSN 4]`. But `iterate()` reads records by position — it has no way to know that the first record in the file is LSN 3 rather than LSN 0. Without extra information, it would assign LSN 0 to the first record, making `replay(checkpoint_lsn=3)` replay nothing (all records would appear to have LSN < 3).
+
+To fix this, `truncate_before` writes the new base LSN to a companion sidecar file (`wal.log.base`) — a single `uint64_t`. On open, `Wal` reads this sidecar to find `base_lsn` and starts counting from there instead of from 0. The sidecar is updated atomically after the WAL file is renamed, so there is no window where the WAL file and the sidecar are inconsistent after a crash.
 
 ## Crash Recovery
 
@@ -231,7 +237,34 @@ Called after a successful checkpoint: once the graph state up to `lsn` is safely
 **Parameters:**
 - `lsn` — truncation point; all records with LSN < `lsn` are removed
 
-*(Not yet implemented — Day 12)*
+**Implementation:**
+1. Read all records with logical LSN >= `lsn` directly from the WAL file.
+2. Write them to a temp file (`wal.log.tmp`).
+3. Write the new `base_lsn` to the sidecar file (`wal.log.base`).
+4. `rename(tmp, wal.log)` — atomic on POSIX, no intermediate state visible on crash.
+5. Update `base_lsn` in memory and reopen the write fd on the new file.
+
+The sidecar must be written **before** the rename (step 3 before step 4). If the order were reversed and the process crashed between rename and sidecar write, the WAL file would contain only records >= `lsn` but the sidecar would still have the old `base_lsn`. On restart, `iterate()` would assign LSNs starting from the old base — the first record in the file (actually LSN `lsn`) would be treated as LSN 0, so `replay(checkpoint_lsn=lsn)` would see no records >= `lsn` and replay nothing. Records written after the checkpoint but before the crash would be lost.
+
+Writing the sidecar first means a crash between steps 3 and 4 leaves the old WAL file intact with the new `base_lsn` recorded. On restart, `iterate()` starts from the new base — the old WAL contains all records >= `lsn`, so some already-checkpointed records may be replayed again. This is safe because replay is idempotent (inserting a node that already exists is a no-op).
+
+---
+
+### `replay(start_lsn, on_insert, on_delete)`
+
+**Purpose:** reconstruct in-memory state from WAL records after a checkpoint.
+
+Wraps `iterate()` and dispatches each record to the appropriate callback based on record type. Called during crash recovery after loading the checkpoint snapshot.
+
+**Parameters:**
+- `start_lsn` — first LSN to replay; pass `checkpoint_lsn` from the checkpoint file
+- `on_insert(id, vec, dim)` — called for each Insert record; should call `hnsw.insert(id, vec)` and `vector_file.append(vec)`
+- `on_delete(id)` — called for each Delete record; should call `hnsw.remove(id)`
+
+**Implementation:** calls `iterate(start_lsn, cb)` and inside the callback, parses the payload by type:
+- Insert: reads `node_id` (first 4 bytes), then `vec` (remaining bytes), computes `dim = (len - 4) / 4`
+- Delete: reads `node_id` (4 bytes)
+- Checkpoint: silently skipped — checkpoint records mark truncation points, not operations to replay
 
 ---
 
@@ -241,9 +274,7 @@ Called after a successful checkpoint: once the graph state up to `lsn` is safely
 
 Useful for recording the current WAL position before taking a checkpoint — the checkpoint stores this value so recovery knows where to start replaying from.
 
-**Returns:** the LSN that will be assigned to the next `append` call (`uint64_t`).
-
-**Returns:** `uint64_t` — next LSN (= number of records written so far).
+**Returns:** the LSN that will be assigned to the next `append` call. Equal to `base_lsn + number of valid records in the file`.
 
 ## Design Decisions
 

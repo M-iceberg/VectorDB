@@ -19,6 +19,8 @@
 // -----------------------------------------------------------------------------
 #pragma once
 #include <cstdint>
+#include <cstring>
+#include <vector>
 
 namespace vectordb {
 
@@ -37,5 +39,27 @@ struct WalRecordHeader {
     WalRecordType  type;
     uint64_t       timestamp_us;
 } __attribute__((packed));
+
+// ---------------------------------------------------------------------------
+// Payload helpers
+// ---------------------------------------------------------------------------
+
+// Insert payload: [node_id: 4B][vec: dim * 4B]
+inline std::vector<uint8_t> make_insert_payload(
+    uint32_t id, const float* vec, size_t dim)
+{
+    std::vector<uint8_t> buf(sizeof(uint32_t) + dim * sizeof(float));
+    std::memcpy(buf.data(), &id, sizeof(uint32_t));
+    std::memcpy(buf.data() + sizeof(uint32_t), vec, dim * sizeof(float));
+    return buf;
+}
+
+// Delete payload: [node_id: 4B]
+inline std::vector<uint8_t> make_delete_payload(uint32_t id)
+{
+    std::vector<uint8_t> buf(sizeof(uint32_t));
+    std::memcpy(buf.data(), &id, sizeof(uint32_t));
+    return buf;
+}
 
 }  // namespace vectordb

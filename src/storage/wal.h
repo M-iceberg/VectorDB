@@ -68,6 +68,14 @@ public:
     // Truncates everything before `lsn` (called after a successful checkpoint).
     void truncate_before(Lsn lsn);
 
+    // Replays all records with LSN >= start_lsn, dispatching to on_insert or
+    // on_delete based on record type. Called during crash recovery to rebuild
+    // in-memory state (HNSW graph) from WAL records since the last checkpoint.
+    // Checkpoint records are silently skipped.
+    void replay(Lsn start_lsn,
+                std::function<void(uint32_t id, const float* vec, size_t dim)> on_insert,
+                std::function<void(uint32_t id)> on_delete) const;
+
     Lsn current_lsn() const;
 
     Wal(const Wal&) = delete;
