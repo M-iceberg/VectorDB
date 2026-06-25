@@ -30,7 +30,7 @@ jobs:
           ./build/tests/unit/test_smoke
           ./build/tests/unit/test_distance
           ./build/tests/unit/test_distance_neon
-          ./build/tests/unit/test_hnsw
+          ./build/tests/unit/test_hnsw_ut
           ./build/tests/unit/test_wal_ut
 
   # -------------------------------------------------------------------------
@@ -56,5 +56,5 @@ jobs:
           ./build/tests/unit/test_smoke
           ./build/tests/unit/test_distance
           ./build/tests/unit/test_distance_avx2
-          ./build/tests/unit/test_hnsw
+          ./build/tests/unit/test_hnsw_ut
           ./build/tests/unit/test_wal_ut
