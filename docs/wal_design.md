@@ -113,10 +113,12 @@ The WAL file is a flat sequence of records written one after another, never over
 ```
 
 **Payload formats:**
-- `Insert`: `[node_id: 4B][vec: dim × 4B]` — node id followed by the raw float vector. The full vector is stored in the WAL so recovery is self-contained: the engine can replay an insert purely from the WAL record without reading from VectorFile.
+- `Insert`: `[node_id: 4B][vec: dim × 4B][num_strings: 2B][string entries...][num_numerics: 2B][numeric entries...]` — node id, raw float vector, then all metadata fields.
 - `Delete`: `[node_id: 4B]`
 
-Storing the full vector in the WAL (rather than just a VectorFile slot reference) preserves strict WAL-first ordering. The alternative — writing to VectorFile first, then recording the slot in the WAL — breaks the invariant: if the process crashes between the VectorFile write and the WAL append, the vector exists on disk but there is no WAL record of it, so recovery has no way to know about it. With the vector in the WAL payload, the WAL is always written first and is the single source of truth for recovery.
+**The WAL stores user-supplied input, not index structures.** Each Insert payload contains exactly what the client passed in — the id, the vector bytes, and the metadata fields. It does not contain HNSW graph edges, neighbor lists, or MetadataIndex inverted lists. Those are derived structures that are recomputed during recovery by re-running the same insert operations. This means a single WAL record is sufficient to recover all three in-memory structures: HnswIndex, VectorFile, and MetadataIndex.
+
+Storing the full vector (and metadata) in the WAL payload, rather than a reference to VectorFile, preserves strict WAL-first ordering. The alternative — writing to VectorFile first, then recording the slot in the WAL — breaks the invariant: if the process crashes between the VectorFile write and the WAL append, the vector exists on disk but there is no WAL record of it, so recovery has no way to know about it. With all user data in the WAL payload, the WAL is always written first and is the single source of truth for recovery.
 
 The checkpoint LSN is stored in the checkpoint file itself, not in the WAL. Recovery reads the checkpoint file to get the LSN, then calls `iterate(checkpoint_lsn, cb)` to replay only the WAL records after that point.
 

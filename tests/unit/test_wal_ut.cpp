@@ -221,8 +221,8 @@ TEST_F(WalTest, ReplayInsertAndDelete) {
     std::vector<std::pair<uint32_t, std::vector<float>>> inserts;
     std::vector<uint32_t> deletes;
 
-    wal.replay(0,
-        [&](uint32_t id, const float* vec, size_t d) {
+    wal.replay(0, dim,
+        [&](uint32_t id, const float* vec, size_t d, const MetadataEntry&) {
             inserts.push_back({id, std::vector<float>(vec, vec + d)});
         },
         [&](uint32_t id) {
@@ -302,8 +302,8 @@ TEST_F(WalTest, ReplayStartLsn) {
 
     Wal wal(path_);
     std::vector<uint32_t> ids;
-    wal.replay(2,
-        [&](uint32_t id, const float*, size_t) { ids.push_back(id); },
+    wal.replay(2, dim,
+        [&](uint32_t id, const float*, size_t, const MetadataEntry&) { ids.push_back(id); },
         [&](uint32_t) {});
 
     ASSERT_EQ(ids.size(), 2u);
@@ -345,8 +345,8 @@ TEST_F(WalTest, CrashAfterSidecarBeforeRename) {
     // replay from checkpoint_lsn=3 must include node IDs 3 and 4
     // (the post-checkpoint records). IDs 0,1,2 may also appear (idempotent).
     std::vector<uint32_t> ids;
-    wal.replay(3,
-        [&](uint32_t id, const float*, size_t) { ids.push_back(id); },
+    wal.replay(3, dim,
+        [&](uint32_t id, const float*, size_t, const MetadataEntry&) { ids.push_back(id); },
         [&](uint32_t) {});
 
     // IDs 3 and 4 must be present — they were not yet checkpointed.

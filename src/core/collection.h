@@ -20,6 +20,7 @@
 #include "distance.h"
 #include <cstddef>
 #include <string>
+#include <unordered_map>
 
 namespace vectordb {
 
@@ -27,6 +28,14 @@ struct CollectionSchema {
     std::string name;
     size_t      dim = 0;
     Metric      metric = Metric::L2;
+};
+
+// Metadata fields attached to a single vector node.
+// String fields support eq / in queries; numeric fields support range queries.
+// Boolean fields are stored as string "0" / "1".
+struct MetadataEntry {
+    std::unordered_map<std::string, std::string> strings;
+    std::unordered_map<std::string, double>      numerics;
 };
 
 // Lightweight metadata container for a named vector collection.

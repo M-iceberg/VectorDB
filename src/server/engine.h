@@ -26,9 +26,9 @@
 //   drop_collection(name)
 //       Destroys the collection and deletes its on-disk files.
 //
-//   insert(collection, id, vec)
-//       Appends vec to VectorFile, writes an Insert WAL record, inserts
-//       into HnswIndex, and updates MetadataIndex.
+//   insert(collection, id, vec, meta)
+//       Appends vec to VectorFile, writes an Insert WAL record (with metadata),
+//       inserts into HnswIndex, and updates MetadataIndex.
 //
 //   remove(collection, id)
 //       Writes a Delete WAL record, tombstones the node in HnswIndex,
@@ -48,11 +48,20 @@
 
 namespace vectordb {
 
+// A single metadata predicate. Multiple filters in SearchRequest are ANDed.
+struct FieldFilter {
+    std::string field;
+    enum class Op { Eq, Range } op = Op::Eq;
+    std::string str_val;        // used when op == Eq
+    double lo = 0, hi = 0;     // used when op == Range (inclusive bounds)
+};
+
 struct SearchRequest {
     std::string  collection;
-    const float* query      = nullptr;
-    int          top_k      = 10;
-    int          ef_search  = 64;
+    const float* query          = nullptr;
+    int          top_k          = 10;
+    int          ef_search      = 64;
+    std::vector<FieldFilter> filters;  // empty = no filter
 };
 
 struct SearchResult {
@@ -71,14 +80,15 @@ public:
     void create_collection(CollectionSchema schema);
     void drop_collection  (const std::string& name);
 
-    void insert(const std::string& collection, uint32_t id, const float* vec);
+    // meta is optional: pass {} or omit for vectors without metadata.
+    void insert(const std::string& collection, uint32_t id, const float* vec,
+                const MetadataEntry& meta = {});
     void remove(const std::string& collection, uint32_t id);
 
     std::vector<SearchResult> search(const SearchRequest& req) const;
 
-    // Writes a checkpoint: serializes the graph, then truncates the WAL up to
-    // the current LSN. After this call, crash recovery restores state from the
-    // checkpoint plus any WAL records appended after the checkpoint.
+    // Writes a checkpoint: serializes the graph and metadata index, then
+    // truncates the WAL up to the current LSN.
     void checkpoint(const std::string& collection);
 
     Engine(const Engine&) = delete;

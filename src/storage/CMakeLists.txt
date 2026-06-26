@@ -3,6 +3,6 @@
 # graph_serializer.cpp added Day 14
 # metadata_index.cpp added Day 16
 
-add_library(vortex_storage STATIC placeholder.cpp wal.cpp vector_file.cpp graph_serializer.cpp metadata_index.cpp)
+add_library(vortex_storage STATIC placeholder.cpp wal.cpp vector_file.cpp graph_serializer.cpp metadata_index.cpp metadata_serializer.cpp)
 target_include_directories(vortex_storage PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(vortex_storage PUBLIC vortex_core)

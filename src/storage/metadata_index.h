@@ -31,6 +31,7 @@
 // -----------------------------------------------------------------------------
 #pragma once
 #include "core/hnsw_node.h"  // NodeId
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -57,6 +58,15 @@ public:
 
     // Removes `id` from all field indices.
     void remove(NodeId id);
+
+    // Iteration helpers for MetadataSerializer. The Pimpl pattern hides the
+    // internal maps, so the serializer cannot access them directly. These
+    // methods let MetadataIndex expose its data without leaking implementation
+    // details — the same approach HnswIndex uses with snapshot().
+    void for_each_string (
+        std::function<void(const std::string&, const std::string&, NodeId)> cb) const;
+    void for_each_numeric(
+        std::function<void(const std::string&, double, NodeId)> cb) const;
 
     MetadataIndex(const MetadataIndex&) = delete;
     MetadataIndex& operator=(const MetadataIndex&) = delete;

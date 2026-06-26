@@ -14,6 +14,7 @@ vdb_test(test_vector_file_ut)    # Day 13: mmap vector storage append/read/grow/
 vdb_test(test_graph_serializer_ut)   # Day 14: graph checkpoint serialize/deserialize/recall
 vdb_test(test_engine_recovery_ut)    # Day 15: checkpoint + full recovery flow
 vdb_test(test_metadata_index_ut)     # Day 16: metadata inverted index + numeric sorted list
+vdb_test(test_metadata_filter_ut)    # Day 17: filtered search correctness + metadata recovery
 
 # Day 9: SIFT recall test (skipped if data not present)
 add_executable(test_sift_recall test_sift_recall.cpp)

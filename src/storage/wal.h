@@ -70,10 +70,14 @@ public:
 
     // Replays all records with LSN >= start_lsn, dispatching to on_insert or
     // on_delete based on record type. Called during crash recovery to rebuild
-    // in-memory state (HNSW graph) from WAL records since the last checkpoint.
-    // Checkpoint records are silently skipped.
+    // in-memory state (HNSW graph + MetadataIndex) from WAL records since the
+    // last checkpoint. Checkpoint records are silently skipped.
+    // vec_dim is required to correctly locate the metadata section in Insert
+    // payloads (which follow immediately after [id: 4B][vec: dim*4B]).
     void replay(Lsn start_lsn,
-                std::function<void(uint32_t id, const float* vec, size_t dim)> on_insert,
+                size_t vec_dim,
+                std::function<void(uint32_t id, const float* vec, size_t dim,
+                                   const MetadataEntry&)> on_insert,
                 std::function<void(uint32_t id)> on_delete) const;
 
     Lsn current_lsn() const;

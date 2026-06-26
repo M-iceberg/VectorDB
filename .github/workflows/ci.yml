@@ -36,6 +36,7 @@ jobs:
           ./build/tests/unit/test_graph_serializer_ut
           ./build/tests/unit/test_engine_recovery_ut
           ./build/tests/unit/test_metadata_index_ut
+          ./build/tests/unit/test_metadata_filter_ut
 
   # -------------------------------------------------------------------------
   # x86 (ubuntu-latest): tests AVX2 path and verifies x86 compilation
@@ -66,3 +67,4 @@ jobs:
           ./build/tests/unit/test_graph_serializer_ut
           ./build/tests/unit/test_engine_recovery_ut
           ./build/tests/unit/test_metadata_index_ut
+          ./build/tests/unit/test_metadata_filter_ut

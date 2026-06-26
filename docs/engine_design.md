@@ -44,7 +44,17 @@ data_dir/
     wal.log.base    — WAL base LSN sidecar (managed by Wal internally)
     vectors.vdb     — mmap vector storage
     graph.bin       — latest HNSW graph checkpoint (absent before first checkpoint)
+    metadata.bin    — latest MetadataIndex checkpoint (absent before first checkpoint)
 ```
+
+**Why binary files?** The `.bin` extension means the file stores raw bytes, not human-readable text. Compare the two formats for the same data:
+
+```
+text (JSON):    {"id": 42, "price": 99.99}   — 26 bytes, must parse strings
+binary:         2A 00 00 00  F6 28 C7 42      —  8 bytes, direct memcpy
+```
+
+Binary is more compact and faster to read/write — no string parsing, no floating-point formatting. The tradeoff is that you can't open it in a text editor. The `.bin` extension is just a convention; the OS doesn't care what the extension is. The magic number at the start of each file is what actually identifies the format (see Graph Serializer Design and Metadata Index Design for details).
 
 `schema.bin` is written once at `create_collection()` time and never modified. On restart, the Engine scans `data_dir` for subdirectories, reads `schema.bin` in each to discover what collections exist, and recovers them.
 
@@ -56,15 +66,16 @@ For every insert:
 1. Build WAL payload: [id: 4B][vec: dim × 4B]
 2. wal.append(Insert, payload)
 3. wal.sync()                   ← force to disk; client success only after this
-4. index.insert(id, vec)        ← update in-memory graph
+4. index.insert(id, vec)        ← update in-memory HNSW graph
 5. vf.append(vec)               ← persist to mmap file
+6. meta.insert_string/numeric() ← update in-memory metadata index
 ```
 
 The critical ordering: **WAL before memory, sync before success.**
 
-If the process crashes after step 3 but before step 4, the WAL has the record and recovery will replay it. If it crashes after step 4 but before step 5, the WAL still has the record; VectorFile will catch up on next open (its own mmap persistence handles most cases, and the WAL covers the gap).
+Steps 4–6 are all in-memory (VectorFile is mmap so writing memory == writing file, but without an explicit fsync). If the process crashes after step 3, the WAL has the record including all metadata fields, and recovery replays it to rebuild all three — HnswIndex, VectorFile, and MetadataIndex — from scratch.
 
-If it crashes before step 3 completes — meaning `sync()` never returned — the record is not guaranteed to be on disk. The client did not receive a success response, so it knows to retry.
+If it crashes before step 3 completes — meaning `sync()` never returned — the record is not on disk. The client did not receive a success response, so it knows to retry.
 
 For removes:
 
@@ -72,7 +83,8 @@ For removes:
 1. Build WAL payload: [id: 4B]
 2. wal.append(Delete, payload)
 3. wal.sync()
-4. index.remove(id)             ← soft-delete (tombstone)
+4. index.remove(id)   ← soft-delete (tombstone) in HNSW graph
+5. meta.remove(id)    ← remove from all metadata field indices
 ```
 
 No VectorFile operation — vectors are never physically deleted (the slot is just orphaned).
@@ -85,9 +97,11 @@ A checkpoint captures the complete current state of the index to disk, then trun
 checkpoint():
   1. GraphSerializer::serialize(index, "graph.bin")
      ← snapshot entire HnswIndex (nodes, neighbor lists, vectors, entry_point)
-  2. lsn = wal.current_lsn()
+  2. MetadataSerializer::serialize(meta, "metadata.bin")
+     ← snapshot all (field, value, id) entries from MetadataIndex
+  3. lsn = wal.current_lsn()
      ← the LSN of the next record to be written (= "we've captured everything before this")
-  3. wal.truncate_before(lsn)
+  4. wal.truncate_before(lsn)
      ← remove records with LSN < lsn; base_lsn sidecar updated atomically
 ```
 
@@ -146,7 +160,7 @@ On startup, for each collection:
 }
 ```
 
-The existence check in on_insert makes recovery idempotent. If recovery itself crashes halfway through WAL replay and restarts, the same WAL records are replayed again. Nodes already in the index (from the first partial replay) are skipped rather than double-inserted.
+Both HnswIndex and MetadataIndex are updated during WAL replay. If a node was inserted with metadata, its metadata fields are re-applied to MetadataIndex as well.
 
 ## The Checkpoint + WAL Lifecycle
 

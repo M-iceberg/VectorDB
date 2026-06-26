@@ -389,5 +389,32 @@ TEST(MetadataIndexTest, FilterCombined) {
     EXPECT_EQ(result, (std::vector<NodeId>{0, 4}));
 }
 
+// insert_string and insert_numeric must be idempotent: calling them twice with
+// the same (field, value, id) must not create duplicate entries.
+TEST(MetadataIndexTest, InsertIdempotentNoDuplicates) {
+    MetadataIndex idx;
+
+    // Insert the same string entry twice.
+    idx.insert_string("color", "red", 1);
+    idx.insert_string("color", "red", 1);
+
+    auto res = sorted(idx.query_eq("color", "red"));
+    EXPECT_EQ(res, (std::vector<NodeId>{1}));
+
+    // Insert the same numeric entry twice.
+    idx.insert_numeric("score", 42.0, 2);
+    idx.insert_numeric("score", 42.0, 2);
+
+    auto num = idx.query_range("score", 42.0, 42.0);
+    EXPECT_EQ(num, (std::vector<NodeId>{2}));
+
+    // remove() must still work correctly after idempotent inserts.
+    idx.remove(1);
+    EXPECT_TRUE(idx.query_eq("color", "red").empty());
+
+    idx.remove(2);
+    EXPECT_TRUE(idx.query_range("score", 42.0, 42.0).empty());
+}
+
 }  // namespace
 }  // namespace vectordb

@@ -1,24 +1,30 @@
 // -----------------------------------------------------------------------------
-// engine.cpp — DB engine orchestrator  (Day 15)
+// engine.cpp — DB engine orchestrator  (Day 15-17)
 //
 // Per-collection on-disk layout under data_dir/{name}/:
-//   schema.bin   — dim(8B) + metric(4B) + pad(4B) = 16 bytes
-//   wal.log      — append-only WAL (+ wal.log.base sidecar)
-//   vectors.vdb  — mmap-backed raw vector storage
-//   graph.bin    — latest graph checkpoint (may not exist before first checkpoint)
+//   schema.bin    — dim(8B) + metric(4B) + pad(4B) = 16 bytes
+//   wal.log       — append-only WAL (+ wal.log.base sidecar)
+//   vectors.vdb   — mmap-backed raw vector storage
+//   graph.bin     — latest graph checkpoint (may not exist before first checkpoint)
+//   metadata.bin  — latest metadata index snapshot (may not exist before first checkpoint)
 // -----------------------------------------------------------------------------
 #include "engine.h"
 #include "core/hnsw_index.h"
 #include "storage/graph_serializer.h"
+#include "storage/metadata_index.h"
+#include "storage/metadata_serializer.h"
 #include "storage/vector_file.h"
 #include "storage/wal.h"
 #include "storage/wal_record.h"
+#include <algorithm>
 #include <fcntl.h>
 #include <filesystem>
+#include <limits>
 #include <mutex>
 #include <shared_mutex>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <unistd.h>
 
 namespace vectordb {
@@ -29,10 +35,11 @@ namespace fs = std::filesystem;
 // ---------------------------------------------------------------------------
 
 struct CollectionState {
-    CollectionSchema            schema;
-    std::unique_ptr<Wal>        wal;
-    std::unique_ptr<VectorFile> vf;
-    std::unique_ptr<HnswIndex>  index;
+    CollectionSchema               schema;
+    std::unique_ptr<Wal>           wal;
+    std::unique_ptr<VectorFile>    vf;
+    std::unique_ptr<HnswIndex>     index;
+    std::unique_ptr<MetadataIndex> meta;
 };
 
 // ---------------------------------------------------------------------------
@@ -91,8 +98,7 @@ struct Engine::Impl {
         return s;
     }
 
-    // Open or recover a collection from disk. Called both by create_collection
-    // (first open, no graph.bin yet) and by the constructor (recovery path).
+    // Open or recover a collection from disk.
     void open_collection(const CollectionSchema& schema) {
         const std::string& name = schema.name;
         std::string dir = col_dir(name);
@@ -106,6 +112,7 @@ struct Engine::Impl {
         cfg.dim    = schema.dim;
         cfg.metric = schema.metric;
 
+        // Load graph snapshot if present.
         std::string graph_path = dir + "/graph.bin";
         if (fs::exists(graph_path)) {
             state.index = GraphSerializer::deserialize(graph_path, cfg);
@@ -113,18 +120,31 @@ struct Engine::Impl {
             state.index = std::make_unique<HnswIndex>(cfg);
         }
 
-        // Replay all WAL records in the file (= everything since last checkpoint).
-        // No existence check needed: HnswIndex::insert() handles duplicate IDs
-        // correctly (won't double-count live_count for re-inserts of live nodes,
-        // and correctly un-tombstones nodes that were removed then re-inserted).
-        auto& idx = *state.index;
+        // Load metadata snapshot if present.
+        std::string meta_path = dir + "/metadata.bin";
+        if (fs::exists(meta_path)) {
+            state.meta = MetadataSerializer::deserialize(meta_path);
+        } else {
+            state.meta = std::make_unique<MetadataIndex>();
+        }
+
+        // Replay WAL records since the last checkpoint.
+        // Passes vec_dim so replay() can locate the metadata section in each
+        // Insert payload. Both HnswIndex and MetadataIndex are updated.
+        auto& idx  = *state.index;
+        auto& meta = *state.meta;
         state.wal->replay(
-            0,  // replay from beginning of current WAL file
-            [&](uint32_t id, const float* vec, size_t /*dim*/) {
+            0,
+            schema.dim,
+            [&](uint32_t id, const float* vec, size_t /*dim*/,
+                const MetadataEntry& m) {
                 idx.insert(id, vec);
+                for (auto& [f, v] : m.strings)  meta.insert_string(f, v, id);
+                for (auto& [f, v] : m.numerics) meta.insert_numeric(f, v, id);
             },
             [&](uint32_t id) {
                 idx.remove(id);
+                meta.remove(id);
             }
         );
 
@@ -140,7 +160,6 @@ Engine::Engine(const std::string& data_dir) : impl_(std::make_unique<Impl>()) {
     impl_->data_dir = data_dir;
     fs::create_directories(data_dir);
 
-    // Discover and recover all persisted collections.
     for (auto& entry : fs::directory_iterator(data_dir)) {
         if (!entry.is_directory()) continue;
         std::string name        = entry.path().filename().string();
@@ -176,20 +195,23 @@ void Engine::drop_collection(const std::string& name) {
     fs::remove_all(impl_->col_dir(name));
 }
 
-void Engine::insert(const std::string& collection, uint32_t id, const float* vec) {
+void Engine::insert(const std::string& collection, uint32_t id,
+                    const float* vec, const MetadataEntry& meta) {
     std::unique_lock lock(impl_->mu);
     auto it = impl_->cols.find(collection);
     if (it == impl_->cols.end())
         throw std::runtime_error("Engine: collection not found: " + collection);
     auto& state = it->second;
 
-    auto payload = make_insert_payload(id, vec, state.schema.dim);
+    auto payload = make_insert_payload(id, vec, state.schema.dim, meta);
     state.wal->append(WalRecordType::Insert, payload.data(),
                       static_cast<uint32_t>(payload.size()));
     state.wal->sync();
     state.index->insert(id, vec);
-    state.vf->append(vec);  // TODO: once HnswIndex::vecs is removed, VectorFile becomes
-                            // the sole vector store and recovery must also replay into it.
+    state.vf->append(vec);
+
+    for (auto& [f, v] : meta.strings)  state.meta->insert_string(f, v, id);
+    for (auto& [f, v] : meta.numerics) state.meta->insert_numeric(f, v, id);
 }
 
 void Engine::remove(const std::string& collection, uint32_t id) {
@@ -204,6 +226,7 @@ void Engine::remove(const std::string& collection, uint32_t id) {
                       static_cast<uint32_t>(payload.size()));
     state.wal->sync();
     state.index->remove(id);
+    state.meta->remove(id);
 }
 
 std::vector<SearchResult> Engine::search(const SearchRequest& req) const {
@@ -213,11 +236,49 @@ std::vector<SearchResult> Engine::search(const SearchRequest& req) const {
         throw std::runtime_error("Engine: collection not found: " + req.collection);
     const auto& state = it->second;
 
-    auto raw = state.index->search(req.query, req.top_k, req.ef_search);
+    bool has_filter = !req.filters.empty();
+
+    // Build allowlist from MetadataIndex when filters are present.
+    std::unordered_set<NodeId> allowlist;
+    if (has_filter) {
+        bool first = true;
+        for (auto& f : req.filters) {
+            std::vector<NodeId> matches;
+            if (f.op == FieldFilter::Op::Eq) {
+                matches = state.meta->query_eq(f.field, f.str_val);
+            } else {
+                matches = state.meta->query_range(f.field, f.lo, f.hi);
+            }
+
+            if (first) {
+                allowlist.insert(matches.begin(), matches.end());
+                first = false;
+            } else {
+                // AND: keep only IDs present in both sets.
+                std::unordered_set<NodeId> tmp;
+                for (NodeId id : matches)
+                    if (allowlist.count(id)) tmp.insert(id);
+                allowlist = std::move(tmp);
+            }
+        }
+    }
+
+    // Inflate ef_search when filtering to compensate for candidates that
+    // fail the filter. Use at least top_k * 5 or the requested ef_search.
+    int ef = req.ef_search;
+    if (has_filter)
+        ef = std::max(ef, req.top_k * 5);
+
+    int search_k = has_filter ? ef : req.top_k;
+    auto raw = state.index->search(req.query, search_k, ef);
+
     std::vector<SearchResult> results;
-    results.reserve(raw.size());
-    for (auto& [dist, id] : raw)
+    results.reserve(static_cast<size_t>(req.top_k));
+    for (auto& [dist, id] : raw) {
+        if (has_filter && !allowlist.count(id)) continue;
         results.push_back({dist, id});
+        if (static_cast<int>(results.size()) == req.top_k) break;
+    }
     return results;
 }
 
@@ -228,11 +289,13 @@ void Engine::checkpoint(const std::string& collection) {
         throw std::runtime_error("Engine: collection not found: " + collection);
     auto& state = it->second;
 
-    std::string graph_path = impl_->col_dir(collection) + "/graph.bin";
-    GraphSerializer::serialize(*state.index, graph_path);
+    std::string dir = impl_->col_dir(collection);
+    // Serialize graph first, then metadata, then truncate WAL.
+    // Graph + metadata must be on disk before WAL truncation so a crash
+    // between the two steps always leaves a recoverable state.
+    GraphSerializer::serialize(*state.index, dir + "/graph.bin");
+    MetadataSerializer::serialize(*state.meta, dir + "/metadata.bin");
 
-    // Truncate WAL up to the current end — records before this LSN are now
-    // captured in graph.bin and no longer needed for recovery.
     Lsn ckpt_lsn = state.wal->current_lsn();
     state.wal->truncate_before(ckpt_lsn);
 }

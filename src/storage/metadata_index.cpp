@@ -44,8 +44,15 @@ MetadataIndex::~MetadataIndex() = default;
 void MetadataIndex::insert_string(const std::string& field,
                                   const std::string& value,
                                   NodeId id) {
+    // Idempotent: skip if (field, value, id) already present. Prevents
+    // duplicate entries when WAL replay re-applies records that are already
+    // captured in a metadata.bin snapshot (crash-during-checkpoint scenario).
+    auto& rev = impl_->string_rev[id];
+    for (auto& [f, v] : rev)
+        if (f == field && v == value) return;
+
     impl_->string_idx[field][value].push_back(id);
-    impl_->string_rev[id].emplace_back(field, value);
+    rev.emplace_back(field, value);
 }
 
 // ---------------------------------------------------------------------------
@@ -55,11 +62,15 @@ void MetadataIndex::insert_string(const std::string& field,
 void MetadataIndex::insert_numeric(const std::string& field,
                                    double value,
                                    NodeId id) {
+    auto& rev = impl_->numeric_rev[id];
+    for (auto& [f, v] : rev)
+        if (f == field && v == value) return;
+
     auto& vec = impl_->numeric_idx[field];
     // Maintain sorted order (by value, then id).
     auto pos = std::lower_bound(vec.begin(), vec.end(), std::make_pair(value, id));
     vec.insert(pos, {value, id});
-    impl_->numeric_rev[id].emplace_back(field, value);
+    rev.emplace_back(field, value);
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +116,21 @@ std::vector<NodeId> MetadataIndex::query_range(const std::string& field,
 // remove
 // ---------------------------------------------------------------------------
 
+void MetadataIndex::for_each_string(
+    std::function<void(const std::string&, const std::string&, NodeId)> cb) const {
+    for (auto& [field, val_map] : impl_->string_idx)
+        for (auto& [value, ids] : val_map)
+            for (NodeId id : ids)
+                cb(field, value, id);
+}
+
+void MetadataIndex::for_each_numeric(
+    std::function<void(const std::string&, double, NodeId)> cb) const {
+    for (auto& [field, pairs] : impl_->numeric_idx)
+        for (auto& [value, id] : pairs)
+            cb(field, value, id);
+}
+
 void MetadataIndex::remove(NodeId id) {
     // Remove from all string index entries this id appears in.
     auto sit = impl_->string_rev.find(id);
@@ -116,6 +142,11 @@ void MetadataIndex::remove(NodeId id) {
             if (vit == fit->second.end()) continue;
             auto& ids = vit->second;
             ids.erase(std::remove(ids.begin(), ids.end(), id), ids.end());
+            if (ids.empty()) {
+                fit->second.erase(vit);
+                if (fit->second.empty())
+                    impl_->string_idx.erase(fit);
+            }
         }
         impl_->string_rev.erase(sit);
     }
@@ -136,6 +167,8 @@ void MetadataIndex::remove(NodeId id) {
                     break;
                 }
             }
+            if (vec.empty())
+                impl_->numeric_idx.erase(fit);
         }
         impl_->numeric_rev.erase(nit);
     }
