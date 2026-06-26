@@ -15,6 +15,7 @@
 #include "storage/wal_record.h"
 #include <fcntl.h>
 #include <filesystem>
+#include <mutex>
 #include <shared_mutex>
 #include <stdexcept>
 #include <unordered_map>
