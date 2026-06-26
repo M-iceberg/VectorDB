@@ -124,6 +124,64 @@ TEST_F(GraphSerializerTest, SearchRecallUnchangedAfterRoundtrip) {
 }
 
 // ---------------------------------------------------------------------------
+// Large-scale recall: 10K vectors, verify search results identical after
+// serialize → deserialize (graph structure fully preserved at scale)
+// ---------------------------------------------------------------------------
+
+TEST_F(GraphSerializerTest, LargeScaleRecallUnchangedAfterRoundtrip) {
+    const size_t dim = 16;
+    const size_t N   = 10000;
+    const size_t Q   = 50;
+    const int    k   = 10;
+    const int    ef  = 64;
+
+    HnswConfig cfg;
+    cfg.dim             = dim;
+    cfg.metric          = Metric::L2;
+    cfg.M               = 8;
+    cfg.M0              = 16;
+    cfg.ef_construction = 32;  // smaller ef for speed at 10K scale
+
+    std::mt19937 rng(2024);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+    std::vector<std::vector<float>> vecs(N, std::vector<float>(dim));
+    for (auto& v : vecs)
+        for (auto& x : v) x = dist(rng);
+
+    HnswIndex original(cfg);
+    for (size_t i = 0; i < N; ++i)
+        original.insert(static_cast<NodeId>(i), vecs[i].data());
+
+    // Run Q queries before serialization.
+    std::vector<std::vector<float>> queries(Q, std::vector<float>(dim));
+    for (auto& q : queries)
+        for (auto& x : q) x = dist(rng);
+
+    std::vector<std::vector<std::pair<float, NodeId>>> before(Q);
+    for (size_t q = 0; q < Q; ++q)
+        before[q] = original.search(queries[q].data(), k, ef);
+
+    GraphSerializer::serialize(original, path_);
+    auto restored = GraphSerializer::deserialize(path_, cfg);
+
+    EXPECT_EQ(restored->size(), original.size());
+
+    // Search results after deserialize must be identical to before serialize.
+    size_t total_hits = 0;
+    for (size_t q = 0; q < Q; ++q) {
+        auto after = restored->search(queries[q].data(), k, ef);
+        ASSERT_EQ(after.size(), before[q].size()) << "query " << q;
+        for (size_t r = 0; r < after.size(); ++r) {
+            if (after[r].second == before[q][r].second) ++total_hits;
+        }
+    }
+
+    // Every result must match exactly — graph structure is deterministic.
+    EXPECT_EQ(total_hits, Q * static_cast<size_t>(k));
+}
+
+// ---------------------------------------------------------------------------
 // Tombstones survive roundtrip
 // ---------------------------------------------------------------------------
 
