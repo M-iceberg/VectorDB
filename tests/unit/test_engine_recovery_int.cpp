@@ -368,5 +368,44 @@ TEST_F(EngineRecoveryTest, CrashRecoveryViaKill) {
     EXPECT_EQ(results.size(), N + M);
 }
 
+// ---------------------------------------------------------------------------
+// Search with top_k > number of nodes returns what's available, not top_k.
+// ---------------------------------------------------------------------------
+
+TEST_F(EngineRecoveryTest, SearchTopKExceedsNodeCount) {
+    const size_t dim = 16;
+    const size_t N   = 3;
+    std::mt19937 rng(99);
+
+    Engine engine(data_dir_);
+    engine.create_collection(make_schema(dim));
+
+    for (size_t i = 0; i < N; ++i) {
+        auto v = random_vec(dim, rng);
+        engine.insert("test", static_cast<uint32_t>(i), v.data());
+    }
+
+    std::vector<float> q = random_vec(dim, rng);
+    auto results = engine.search({"test", q.data(), 10, 50});
+    EXPECT_EQ(results.size(), N);  // only 3 nodes exist, must return 3 not 10
+}
+
+// ---------------------------------------------------------------------------
+// Error propagation: insert/search/remove/checkpoint on unknown collection.
+// ---------------------------------------------------------------------------
+
+TEST_F(EngineRecoveryTest, UnknownCollectionThrows) {
+    Engine engine(data_dir_);
+    engine.create_collection(make_schema());
+
+    std::vector<float> v(16, 0.0f);
+
+    EXPECT_THROW(engine.insert("no_such", 1, v.data()), std::runtime_error);
+    EXPECT_THROW(engine.remove("no_such", 1),            std::runtime_error);
+    EXPECT_THROW(engine.search({"no_such", v.data(), 1, 10}), std::runtime_error);
+    EXPECT_THROW(engine.checkpoint("no_such"),           std::runtime_error);
+    EXPECT_THROW(engine.drop_collection("no_such"),      std::runtime_error);
+}
+
 }  // namespace
 }  // namespace vectordb

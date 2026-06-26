@@ -26,6 +26,9 @@
 //   drop_collection(name)
 //       Destroys the collection and deletes its on-disk files.
 //
+//   list_collections() → vector<CollectionSchema>
+//       Returns the schema of every open collection.
+//
 //   insert(collection, id, vec, meta)
 //       Appends vec to VectorFile, writes an Insert WAL record (with metadata),
 //       inserts into HnswIndex, and updates MetadataIndex.
@@ -79,6 +82,7 @@ public:
 
     void create_collection(CollectionSchema schema);
     void drop_collection  (const std::string& name);
+    std::vector<CollectionSchema> list_collections() const;
 
     // meta is optional: pass {} or omit for vectors without metadata.
     void insert(const std::string& collection, uint32_t id, const float* vec,

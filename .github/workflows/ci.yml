@@ -34,9 +34,10 @@ jobs:
           ./build/tests/unit/test_wal_ut
           ./build/tests/unit/test_vector_file_ut
           ./build/tests/unit/test_graph_serializer_ut
-          ./build/tests/unit/test_engine_recovery_ut
+          ./build/tests/unit/test_engine_recovery_int
           ./build/tests/unit/test_metadata_index_ut
-          ./build/tests/unit/test_metadata_filter_ut
+          ./build/tests/unit/test_metadata_filter_int
+          ./build/tests/unit/test_engine_full_flow_int
 
   # -------------------------------------------------------------------------
   # x86 (ubuntu-latest): tests AVX2 path and verifies x86 compilation
@@ -65,6 +66,7 @@ jobs:
           ./build/tests/unit/test_wal_ut
           ./build/tests/unit/test_vector_file_ut
           ./build/tests/unit/test_graph_serializer_ut
-          ./build/tests/unit/test_engine_recovery_ut
+          ./build/tests/unit/test_engine_recovery_int
           ./build/tests/unit/test_metadata_index_ut
-          ./build/tests/unit/test_metadata_filter_ut
+          ./build/tests/unit/test_metadata_filter_int
+          ./build/tests/unit/test_engine_full_flow_int

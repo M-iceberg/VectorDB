@@ -186,6 +186,15 @@ void Engine::create_collection(CollectionSchema schema) {
     impl_->open_collection(schema);
 }
 
+std::vector<CollectionSchema> Engine::list_collections() const {
+    std::shared_lock lock(impl_->mu);
+    std::vector<CollectionSchema> result;
+    result.reserve(impl_->cols.size());
+    for (auto& [name, state] : impl_->cols)
+        result.push_back(state.schema);
+    return result;
+}
+
 void Engine::drop_collection(const std::string& name) {
     std::unique_lock lock(impl_->mu);
     auto it = impl_->cols.find(name);
