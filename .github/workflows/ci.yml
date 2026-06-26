@@ -38,6 +38,7 @@ jobs:
           ./build/tests/unit/test_metadata_index_ut
           ./build/tests/unit/test_metadata_filter_int
           ./build/tests/unit/test_engine_full_flow_int
+          ./build/tests/unit/test_concurrency_int
 
   # -------------------------------------------------------------------------
   # x86 (ubuntu-latest): tests AVX2 path and verifies x86 compilation
@@ -70,3 +71,4 @@ jobs:
           ./build/tests/unit/test_metadata_index_ut
           ./build/tests/unit/test_metadata_filter_int
           ./build/tests/unit/test_engine_full_flow_int
+          ./build/tests/unit/test_concurrency_int

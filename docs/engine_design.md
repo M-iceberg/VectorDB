@@ -183,12 +183,46 @@ On crash between checkpoints A and B:
 - WAL has 4..whatever was written before crash
 - Recovery: load graph.bin (gives 0..3) + replay WAL (gives 4..crash point) = full state
 
+## Thread Safety
+
+All public methods are protected by a single `std::shared_mutex` (`impl_->mu`).
+
+```
+search() / list_collections()                    → std::shared_lock
+insert() / remove() / create_collection()
+  / drop_collection() / checkpoint()             → std::unique_lock
+```
+
+**Why search() uses shared_lock, not unique_lock**
+
+`search()` does not modify any state, so multiple search calls can run concurrently without interfering with each other. `shared_lock` allows any number of readers to hold the lock simultaneously. A `unique_lock` would serialize all searches — each one waiting for the previous to finish — with no benefit.
+
+**Why search() needs any lock at all**
+
+Even though search only reads, another thread might be inside `insert()` concurrently, modifying the HnswIndex neighbor lists and the MetadataIndex. Reading a data structure while another thread is writing it is a data race — undefined behavior in C++, with the real-world effect of reading half-written values or crashing. The `shared_lock` prevents this: it guarantees that no `unique_lock` (writer) is active while the search is reading.
+
+**Lock interactions**
+
+```
+Thread A: shared_lock held (search in progress)
+Thread B: shared_lock held (another search) — allowed, runs concurrently with A
+Thread C: wants unique_lock (insert)        — blocked until A and B both release
+
+Thread D: unique_lock held (insert in progress)
+Thread E: wants shared_lock (new search)    — blocked until D releases
+Thread F: wants unique_lock (another insert)— blocked until D releases
+```
+
+Once a writer is waiting for `unique_lock`, most `shared_mutex` implementations (including macOS `pthread_rwlock`) block new readers from acquiring `shared_lock`. This prevents writer starvation — a writer does not wait indefinitely while a stream of new readers keeps inserting ahead of it. The C++ standard does not guarantee this behavior, but it is the common implementation choice.
+
+**Coarse-grained vs fine-grained**
+
+The current lock is coarse: one mutex covers all collections. Two searches on different collections still run sequentially if an insert on any collection holds the write lock. A fine-grained alternative would be one mutex per collection. This is a future optimization — it is only worth doing if profiling shows lock contention as a bottleneck.
+
 ## What the Engine Does NOT Do (Yet)
 
-- **Metadata filtering** (Day 16–17): the Engine has no MetadataIndex yet. `search()` returns raw HNSW results without filtering.
-- **Thread-safe concurrent access** (Day 19): a `shared_mutex` stub exists but the locking strategy is coarse (one lock for all collections).
 - **VectorFile sync on recovery**: during WAL replay, the Engine only updates HnswIndex. VectorFile may be missing vectors from the crash window (written to WAL but not flushed). Since HnswIndex stores its own vector copies, search works correctly. Full VectorFile sync on recovery is a future improvement.
-- **Multiple collections per engine**: the current implementation supports it in principle (separate subdirectory per collection) but has not been load-tested with many collections.
+- **Per-collection locking**: the current `shared_mutex` covers all collections. Two operations on different collections still contend on the same lock.
 
 ## API
 
