@@ -12,3 +12,5 @@ compile_commands.json
 data/*
 !data/.gitkeep
 data/sift/
+python/vectordb/_vectordb*.so
+python/vectordb/__pycache__/

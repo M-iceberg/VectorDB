@@ -41,9 +41,26 @@ enable_testing()
 include(GoogleTest)
 
 # --------------------------------------------------------------------------
+# Python bindings (opt-in: cmake -DVECTORDB_PYTHON=ON)
+# --------------------------------------------------------------------------
+option(VECTORDB_PYTHON "Build Python bindings via pybind11" OFF)
+if(VECTORDB_PYTHON)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module NumPy)
+    FetchContent_Declare(
+        pybind11
+        URL https://github.com/pybind/pybind11/archive/refs/tags/v2.13.6.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(pybind11)
+endif()
+
+# --------------------------------------------------------------------------
 # Subdirectories
 # --------------------------------------------------------------------------
 add_subdirectory(src)
 add_subdirectory(tests)
 add_subdirectory(bench)
 add_subdirectory(tools)
+if(VECTORDB_PYTHON)
+    add_subdirectory(python)
+endif()
