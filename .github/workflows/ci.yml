@@ -34,6 +34,7 @@ jobs:
           ./build/tests/unit/test_wal_ut
           ./build/tests/unit/test_vector_file_ut
           ./build/tests/unit/test_graph_serializer_ut
+          ./build/tests/unit/test_engine_recovery_ut
 
   # -------------------------------------------------------------------------
   # x86 (ubuntu-latest): tests AVX2 path and verifies x86 compilation
@@ -62,3 +63,4 @@ jobs:
           ./build/tests/unit/test_wal_ut
           ./build/tests/unit/test_vector_file_ut
           ./build/tests/unit/test_graph_serializer_ut
+          ./build/tests/unit/test_engine_recovery_ut

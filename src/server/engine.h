@@ -76,6 +76,11 @@ public:
 
     std::vector<SearchResult> search(const SearchRequest& req) const;
 
+    // Writes a checkpoint: serializes the graph, then truncates the WAL up to
+    // the current LSN. After this call, crash recovery restores state from the
+    // checkpoint plus any WAL records appended after the checkpoint.
+    void checkpoint(const std::string& collection);
+
     Engine(const Engine&) = delete;
     Engine& operator=(const Engine&) = delete;
 

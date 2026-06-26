@@ -69,7 +69,12 @@ struct HnswIndex::Impl {
     // graph traversal only touches nodes (compact, cache-friendly), while distance
     // computation only touches vecs. Merging them would bloat the graph traversal
     // working set and hurt cache efficiency.
-    // (Day 13: replaced by VectorFile — vectors stored on disk in aligned slabs.)
+    //
+    // TODO: replace this map with VectorFile (Day 13). Currently both exist:
+    // Engine::insert() writes to VectorFile AND fills this map. Search uses only
+    // this map — VectorFile is never read during search. Once this map is removed
+    // and search reads from VectorFile instead, recovery must also replay WAL into
+    // VectorFile (not just HnswIndex) to keep them in sync.
     std::unordered_map<NodeId, std::vector<float>> vecs;
 
     NodeId entry_point = kInvalidNode;
@@ -266,6 +271,14 @@ void HnswIndex::insert(NodeId id, const float* vec) {
     // Store the vector.
     I.vecs[id] = std::vector<float>(vec, vec + I.cfg.dim);
 
+    // Determine whether this is a new node or a re-insert of an existing one.
+    // live_count must only be incremented if the node is new or was tombstoned —
+    // re-inserting a live node (e.g. same WAL record replayed twice) must not
+    // double-count it.
+    auto existing = I.nodes.find(id);
+    bool is_new          = (existing == I.nodes.end());
+    bool was_tombstoned  = !is_new && existing->second.tombstone;
+
     // Create the node and assign a random layer.
     int assigned_layer = I.assign_layer();
     HnswNode node;
@@ -273,7 +286,8 @@ void HnswIndex::insert(NodeId id, const float* vec) {
     node.layer    = assigned_layer;
     node.neighbors.resize(assigned_layer + 1);  // one neighbor list per layer 0..assigned_layer
     I.nodes[id]   = std::move(node);
-    ++I.live_count;
+    if (is_new || was_tombstoned)
+        ++I.live_count;
 
     // First node becomes the entry point.
     if (I.entry_point == kInvalidNode) {
