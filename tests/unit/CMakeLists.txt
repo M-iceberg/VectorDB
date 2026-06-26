@@ -17,6 +17,7 @@ vdb_test(test_metadata_index_ut)     # Day 16: metadata inverted index + numeric
 vdb_test(test_metadata_filter_int)   # Day 17: filtered search correctness + metadata recovery
 vdb_test(test_engine_full_flow_int)  # Day 18: full CRUD flow + list_collections
 vdb_test(test_concurrency_int)       # Day 19: concurrent readers + writer, no deadlock/crash
+vdb_test(test_e2e_int)               # Day 20: 10K end-to-end + scale crash recovery
 
 # Day 9: SIFT recall test (skipped if data not present)
 add_executable(test_sift_recall test_sift_recall.cpp)
