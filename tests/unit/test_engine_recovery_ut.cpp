@@ -4,6 +4,9 @@
 #include <chrono>
 #include <filesystem>
 #include <random>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 
 namespace vectordb {
@@ -301,6 +304,68 @@ TEST_F(EngineRecoveryTest, SearchEmptyCollection) {
     std::vector<float> query(16, 0.0f);
     auto results = engine.search({"test", query.data(), 10, 50});
     EXPECT_TRUE(results.empty());
+}
+
+// ---------------------------------------------------------------------------
+// True crash simulation: fork a child that inserts + checkpoints + inserts,
+// then SIGKILL it without letting destructors run. Parent recovers and
+// verifies all data is present.
+// ---------------------------------------------------------------------------
+
+TEST_F(EngineRecoveryTest, CrashRecoveryViaKill) {
+    const size_t dim = 16;
+    const size_t N   = 100;   // before checkpoint
+    const size_t M   = 50;    // after checkpoint
+    std::mt19937 rng(42);
+
+    std::vector<std::vector<float>> vecs(N + M, std::vector<float>(dim));
+    for (auto& v : vecs) v = random_vec(dim, rng);
+
+    // Pipe for child → parent "all inserts done" signal.
+    int pipefd[2];
+    ASSERT_EQ(::pipe(pipefd), 0);
+
+    pid_t pid = ::fork();
+    ASSERT_GE(pid, 0);
+
+    if (pid == 0) {
+        // ---- child process ----
+        ::close(pipefd[0]);
+
+        Engine engine(data_dir_);
+        engine.create_collection(make_schema(dim));
+        for (uint32_t i = 0; i < N; ++i)
+            engine.insert("test", i, vecs[i].data());
+        engine.checkpoint("test");
+        for (uint32_t i = N; i < N + M; ++i)
+            engine.insert("test", i, vecs[i].data());
+
+        // Every insert called wal.sync() → fsync(), so all data is on disk.
+        // Signal parent and wait to be killed.
+        char ready = 1;
+        ::write(pipefd[1], &ready, 1);
+        ::close(pipefd[1]);
+        ::pause();       // wait for SIGKILL — destructors never run
+        ::_exit(0);
+    }
+
+    // ---- parent process ----
+    ::close(pipefd[1]);
+
+    // Wait until child has finished all inserts and synced to disk.
+    char ready = 0;
+    ASSERT_EQ(::read(pipefd[0], &ready, 1), 1);
+    ::close(pipefd[0]);
+
+    // Kill the child — simulates SIGKILL crash, no destructors run.
+    ASSERT_EQ(::kill(pid, SIGKILL), 0);
+    ::waitpid(pid, nullptr, 0);
+
+    // Recover: graph.bin (N vectors) + WAL (M records) → must see all N+M.
+    Engine recovered(data_dir_);
+    auto q = random_vec(dim, rng);
+    auto results = recovered.search({"test", q.data(), static_cast<int>(N + M), 200});
+    EXPECT_EQ(results.size(), N + M);
 }
 
 }  // namespace
