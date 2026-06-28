@@ -1,5 +1,11 @@
 # Python Bindings Design
 
+## Why not pure Python?
+
+HNSW search and SIMD distance computation are performance-critical. A pure Python implementation would be 10–100× slower: Python has per-instruction interpreter overhead, no SIMD intrinsics, and the GIL serializes threads. Rewriting these in Python would eliminate all the work done in `core/` and `storage/`.
+
+pybind11 keeps both advantages: Python handles the interface (scripting, data loading, model integration), C++ handles the computation. The boundary is thin — one function call per insert or search — so the overhead of crossing it is negligible compared to the work done inside.
+
 ## What are the Python bindings?
 
 The Python bindings expose the C++ Engine to Python using pybind11. The result is a native Python extension module (`_vectordb.so`) that Python imports like any other package. There is no server, no network, no serialization — Python calls directly into the same C++ code that the unit tests use.
@@ -80,8 +86,45 @@ python/
     _vectordb.*.so      — compiled extension (generated, not in git)
 ```
 
-## What is NOT in Day 21
+## Metadata and filters (Day 22)
 
-- **Metadata / filters** (Day 22): `insert` does not accept a metadata dict yet. `search` does not accept filters.
+`insert` accepts an optional `metadata` dict. `search` accepts an optional `filters` dict.
+
+### Metadata dict → MetadataEntry
+
+```python
+db.insert("col", 42, vec, metadata={"category": "ml", "year": 2024, "active": True})
+```
+
+Conversion rules:
+- `str` value → `MetadataEntry.strings`
+- `float` / `int` value → `MetadataEntry.numerics`
+- `bool` value → `MetadataEntry.strings` as `"1"` / `"0"` (bool is a subclass of int in Python, so it is checked first)
+
+### Filter dict → FieldFilter list
+
+```python
+# string equality
+db.search("col", query, filters={"category": "ml"})
+
+# numeric range
+db.search("col", query, filters={"year": {"$gte": 2020, "$lte": 2024}})
+
+# combined (AND semantics — Engine ANDs all filters)
+db.search("col", query, filters={"category": "ml", "year": {"$gte": 2020}})
+```
+
+Supported operators: `$gte` (lower bound, inclusive), `$lte` (upper bound, inclusive). Multiple top-level keys are ANDed by the Engine.
+
+### Exception mapping
+
+pybind11 maps C++ exceptions to Python automatically:
+- `std::runtime_error` → `RuntimeError` (collection not found, etc.)
+- `std::invalid_argument` → `ValueError` (wrong vector dim, unknown filter op, bad metadata type)
+
+No explicit translation code is needed.
+
+## What is NOT done yet
+
 - **Batch insert**: insert takes one vector at a time. Batch support (2-D numpy array) is a future addition.
 - **`pip install .` packaging** (Day 23): the package is not yet installable via pip. It must be used from the `python/` directory with the `.so` in place.

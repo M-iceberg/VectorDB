@@ -14,3 +14,4 @@ data/*
 data/sift/
 python/vectordb/_vectordb*.so
 python/vectordb/__pycache__/
+python/__pycache__/

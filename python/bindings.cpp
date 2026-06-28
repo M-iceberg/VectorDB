@@ -1,8 +1,9 @@
-// Python bindings for VortexDB — Day 21
+// Python bindings for VortexDB
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include "server/engine.h"
+#include <limits>
 #include <stdexcept>
 
 namespace py = pybind11;
@@ -10,7 +11,6 @@ using namespace vectordb;
 
 namespace {
 
-// Convert "l2" / "cosine" / "ip" string to Metric enum.
 Metric parse_metric(const std::string& s) {
     if (s == "cosine") return Metric::Cosine;
     if (s == "ip")     return Metric::InnerProduct;
@@ -26,36 +26,74 @@ std::string metric_to_str(Metric m) {
     }
 }
 
-// Validate that arr is a 1-D contiguous float32 array of length dim.
-const float* validate_vec(
-    const py::array_t<float, py::array::c_style | py::array::forcecast>& arr,
-    size_t dim)
-{
-    auto buf = arr.request();
-    if (buf.ndim != 1)
-        throw std::invalid_argument("vector must be 1-D, got " +
-                                    std::to_string(buf.ndim) + "-D");
-    if (static_cast<size_t>(buf.shape[0]) != dim)
-        throw std::invalid_argument("vector length " +
-                                    std::to_string(buf.shape[0]) +
-                                    " does not match collection dim " +
-                                    std::to_string(dim));
-    return static_cast<const float*>(buf.ptr);
+// Convert Python dict {"color": "red", "price": 9.9} -> MetadataEntry.
+// bool is a subclass of int in Python, so check py::bool_ first.
+MetadataEntry parse_metadata(const py::dict& d) {
+    MetadataEntry entry;
+    for (auto item : d) {
+        std::string key = item.first.cast<std::string>();
+        auto val = item.second;
+        if (py::isinstance<py::bool_>(val)) {
+            entry.strings[key] = val.cast<bool>() ? "1" : "0";
+        } else if (py::isinstance<py::str>(val)) {
+            entry.strings[key] = val.cast<std::string>();
+        } else if (py::isinstance<py::float_>(val) || py::isinstance<py::int_>(val)) {
+            entry.numerics[key] = val.cast<double>();
+        } else {
+            throw std::invalid_argument("metadata value for '" + key +
+                                        "' must be str, float, int, or bool");
+        }
+    }
+    return entry;
+}
+
+// Convert Python filter dict -> std::vector<FieldFilter>.
+// Supported syntax:
+//   {"color": "red"}                      -> Eq("color", "red")
+//   {"price": {"$gte": 10.0}}             -> Range("price", 10.0, +inf)
+//   {"price": {"$lte": 100.0}}            -> Range("price", -inf, 100.0)
+//   {"price": {"$gte": 10, "$lte": 100}}  -> Range("price", 10, 100)
+// Multiple keys are ANDed by the Engine.
+std::vector<FieldFilter> parse_filters(const py::dict& d) {
+    std::vector<FieldFilter> filters;
+    const double INF = std::numeric_limits<double>::infinity();
+    for (auto item : d) {
+        std::string field = item.first.cast<std::string>();
+        auto val = item.second;
+        FieldFilter f;
+        f.field = field;
+        if (py::isinstance<py::str>(val)) {
+            f.op      = FieldFilter::Op::Eq;
+            f.str_val = val.cast<std::string>();
+        } else if (py::isinstance<py::dict>(val)) {
+            f.op = FieldFilter::Op::Range;
+            f.lo = -INF;
+            f.hi =  INF;
+            for (auto op_item : val.cast<py::dict>()) {
+                std::string op  = op_item.first.cast<std::string>();
+                double      num = op_item.second.cast<double>();
+                if      (op == "$gte") f.lo = num;
+                else if (op == "$lte") f.hi = num;
+                else throw std::invalid_argument(
+                    "unknown filter op '" + op + "': use '$gte' or '$lte'");
+            }
+        } else {
+            throw std::invalid_argument("filter value for '" + field +
+                                        "' must be a string or a dict");
+        }
+        filters.push_back(std::move(f));
+    }
+    return filters;
 }
 
 }  // namespace
 
 PYBIND11_MODULE(_vectordb, m) {
-    m.doc() = "VortexDB — high-performance vector search engine";
+    m.doc() = "VortexDB -- high-performance vector search engine";
 
-    // ------------------------------------------------------------------
-    // Engine class
-    // ------------------------------------------------------------------
     py::class_<Engine>(m, "Engine")
-        .def(py::init<const std::string&>(), py::arg("data_dir"),
-             "Open (or create) a VortexDB database at data_dir.")
+        .def(py::init<const std::string&>(), py::arg("data_dir"))
 
-        // Collection management
         .def("create_collection",
             [](Engine& self, const std::string& name, size_t dim,
                const std::string& metric) {
@@ -65,11 +103,9 @@ PYBIND11_MODULE(_vectordb, m) {
                 s.metric = parse_metric(metric);
                 self.create_collection(s);
             },
-            py::arg("name"), py::arg("dim"), py::arg("metric") = "l2",
-            "Create a new collection. metric: 'l2' | 'cosine' | 'ip'.")
+            py::arg("name"), py::arg("dim"), py::arg("metric") = "l2")
 
-        .def("drop_collection", &Engine::drop_collection, py::arg("name"),
-             "Drop a collection and delete its files.")
+        .def("drop_collection", &Engine::drop_collection, py::arg("name"))
 
         .def("list_collections",
             [](Engine& self) {
@@ -82,32 +118,33 @@ PYBIND11_MODULE(_vectordb, m) {
                     out.append(d);
                 }
                 return out;
-            },
-            "Return a list of dicts describing every open collection.")
+            })
 
-        // Insert: zero-copy numpy → float*
+        // insert with optional metadata dict
         .def("insert",
             [](Engine& self, const std::string& collection, uint32_t id,
-               py::array_t<float, py::array::c_style | py::array::forcecast> vec) {
+               py::array_t<float, py::array::c_style | py::array::forcecast> vec,
+               py::object metadata) {
                 auto buf = vec.request();
                 if (buf.ndim != 1)
                     throw std::invalid_argument("vector must be 1-D");
+                MetadataEntry meta;
+                if (!metadata.is_none())
+                    meta = parse_metadata(metadata.cast<py::dict>());
                 self.insert(collection, id,
-                            static_cast<const float*>(buf.ptr));
+                            static_cast<const float*>(buf.ptr), meta);
             },
             py::arg("collection"), py::arg("id"), py::arg("vector"),
-            "Insert a vector (1-D numpy float32 array) with the given id.")
+            py::arg("metadata") = py::none())
 
-        // Remove
         .def("remove", &Engine::remove,
-             py::arg("collection"), py::arg("id"),
-             "Soft-delete a vector by id.")
+             py::arg("collection"), py::arg("id"))
 
-        // Search: returns list of {"id": ..., "distance": ...}
+        // search with optional filters dict
         .def("search",
             [](Engine& self, const std::string& collection,
                py::array_t<float, py::array::c_style | py::array::forcecast> query,
-               int top_k, int ef_search) {
+               int top_k, int ef_search, py::object filters) {
                 auto buf = query.request();
                 if (buf.ndim != 1)
                     throw std::invalid_argument("query must be 1-D");
@@ -116,6 +153,8 @@ PYBIND11_MODULE(_vectordb, m) {
                 req.query      = static_cast<const float*>(buf.ptr);
                 req.top_k      = top_k;
                 req.ef_search  = ef_search;
+                if (!filters.is_none())
+                    req.filters = parse_filters(filters.cast<py::dict>());
                 auto results = self.search(req);
                 py::list out;
                 for (auto& r : results) {
@@ -128,17 +167,11 @@ PYBIND11_MODULE(_vectordb, m) {
             },
             py::arg("collection"), py::arg("query"),
             py::arg("top_k") = 10, py::arg("ef_search") = 64,
-            "Search for top_k nearest neighbors. Returns list of {id, distance}.")
+            py::arg("filters") = py::none())
 
-        // Checkpoint
-        .def("checkpoint", &Engine::checkpoint, py::arg("collection"),
-             "Snapshot the collection to disk and truncate the WAL.");
+        .def("checkpoint", &Engine::checkpoint, py::arg("collection"));
 
-    // ------------------------------------------------------------------
-    // Module-level open() convenience function
-    // ------------------------------------------------------------------
     m.def("open", [](const std::string& data_dir) {
         return std::make_unique<Engine>(data_dir);
-    }, py::arg("data_dir"),
-    "Open (or create) a VortexDB database. Returns an Engine instance.");
+    }, py::arg("data_dir"));
 }
