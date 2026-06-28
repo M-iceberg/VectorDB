@@ -2,6 +2,21 @@
 
 A vector database built from scratch in C++. Supports insert, k-NN search, delete, and metadata-filtered search using an HNSW index with SIMD-accelerated distance functions, a write-ahead log for crash safety, and a Python SDK.
 
+## Benchmark — SIFT-1M (1M vectors, dim=128, L2)
+
+| ef_search | QPS | Recall@1 | Recall@10 | Recall@100 |
+|-----------|-----|----------|-----------|------------|
+| 50  | 1,909 | 98.6% | 98.6% | 93.3% |
+| 100 | 1,923 | 98.6% | 98.6% | 93.3% |
+| 200 | 1,148 | 99.2% | 99.7% | 98.2% |
+| 400 |   678 | 99.2% | 99.9% | 99.6% |
+| 800 |   390 | 99.3% | 99.9% | 99.9% |
+
+Insert throughput: **177 vec/s** (single-threaded, ARM NEON, Python SDK).
+
+![Recall vs ef_search](bench_results/sift/recall_vs_ef.png)
+![QPS vs Recall](bench_results/sift/qps_vs_recall.png)
+
 ## Key features
 
 - **HNSW index** — sub-linear approximate nearest-neighbor search
