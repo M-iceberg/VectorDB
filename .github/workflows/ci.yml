@@ -42,6 +42,32 @@ jobs:
           ./build/tests/unit/test_e2e_int
 
   # -------------------------------------------------------------------------
+  # Python bindings: pip install . on x86 Linux (AVX2 path)
+  # -------------------------------------------------------------------------
+  python-bindings:
+    name: Python bindings (x86 / AVX2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: pip install scikit-build-core pybind11 numpy pytest
+
+      - name: pip install
+        run: pip install . --no-build-isolation
+
+      - name: Run pytest
+        run: pytest python/test_bindings.py -v
+
+  # -------------------------------------------------------------------------
   # x86 (ubuntu-latest): tests AVX2 path and verifies x86 compilation
   # -------------------------------------------------------------------------
   test-x86:

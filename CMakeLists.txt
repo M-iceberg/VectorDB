@@ -12,33 +12,41 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 include(SimdDetect)
 
 # --------------------------------------------------------------------------
-# Google Test
+# VECTORDB_PYTHON_ONLY: skip tests/bench/tools (used by pip install)
 # --------------------------------------------------------------------------
-include(FetchContent)
-FetchContent_Declare(
-    googletest
-    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
+option(VECTORDB_PYTHON_ONLY "Skip tests, bench, and tools (for pip install)" OFF)
 
-# --------------------------------------------------------------------------
-# Google Benchmark (only fetched when VECTORDB_BENCH=ON)
-# --------------------------------------------------------------------------
-if(VECTORDB_BENCH)
-    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
-    set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+include(FetchContent)
+
+if(NOT VECTORDB_PYTHON_ONLY)
+    # --------------------------------------------------------------------------
+    # Google Test
+    # --------------------------------------------------------------------------
     FetchContent_Declare(
-        googlebenchmark
-        URL https://github.com/google/benchmark/archive/refs/tags/v1.8.4.tar.gz
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
-    FetchContent_MakeAvailable(googlebenchmark)
-endif()
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
 
-enable_testing()
-include(GoogleTest)
+    # --------------------------------------------------------------------------
+    # Google Benchmark (only fetched when VECTORDB_BENCH=ON)
+    # --------------------------------------------------------------------------
+    if(VECTORDB_BENCH)
+        set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+        set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+            googlebenchmark
+            URL https://github.com/google/benchmark/archive/refs/tags/v1.8.4.tar.gz
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        )
+        FetchContent_MakeAvailable(googlebenchmark)
+    endif()
+
+    enable_testing()
+    include(GoogleTest)
+endif()
 
 # --------------------------------------------------------------------------
 # Python bindings (opt-in: cmake -DVECTORDB_PYTHON=ON)
@@ -58,9 +66,11 @@ endif()
 # Subdirectories
 # --------------------------------------------------------------------------
 add_subdirectory(src)
-add_subdirectory(tests)
-add_subdirectory(bench)
-add_subdirectory(tools)
+if(NOT VECTORDB_PYTHON_ONLY)
+    add_subdirectory(tests)
+    add_subdirectory(bench)
+    add_subdirectory(tools)
+endif()
 if(VECTORDB_PYTHON)
     add_subdirectory(python)
 endif()

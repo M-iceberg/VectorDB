@@ -14,3 +14,6 @@ target_link_libraries(_vectordb PRIVATE
 set_target_properties(_vectordb PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/vectordb
 )
+
+# Install target used by `pip install .` (scikit-build-core).
+install(TARGETS _vectordb DESTINATION vectordb)

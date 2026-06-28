@@ -1,0 +1,17 @@
+[build-system]
+requires = ["scikit-build-core>=0.9", "pybind11>=2.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "vectordb"
+version = "0.1.0"
+description = "VortexDB: high-performance vector search engine"
+requires-python = ">=3.8"
+dependencies = ["numpy"]
+
+[tool.scikit-build]
+# Enable Python bindings and skip tests/bench/tools during pip install.
+cmake.args = ["-DVECTORDB_PYTHON=ON", "-DVECTORDB_PYTHON_ONLY=ON"]
+cmake.build-type = "Release"
+# Python source files to include in the wheel alongside the compiled .so.
+wheel.packages = ["python/vectordb"]
