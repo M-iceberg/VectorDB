@@ -140,7 +140,8 @@ TEST_F(E2ETest, ScaleCrashRecovery) {
     std::vector<std::vector<float>> vecs(N + M, std::vector<float>(dim));
     for (auto& v : vecs) v = random_vec(dim, rng);
 
-    std::string flag = data_dir_ + "/checkpoint_done";
+    std::string ckpt_flag = data_dir_ + "/checkpoint_done";
+    std::string done_flag = data_dir_ + "/inserts_done";
 
     pid_t pid = ::fork();
     ASSERT_GE(pid, 0) << "fork failed";
@@ -151,27 +152,30 @@ TEST_F(E2ETest, ScaleCrashRecovery) {
         for (size_t i = 0; i < N; ++i)
             engine.insert("test", static_cast<uint32_t>(i), vecs[i].data());
         engine.checkpoint("test");
-        // Signal parent that checkpoint is done.
-        std::ofstream(flag).close();
+        std::ofstream(ckpt_flag).close();
         for (size_t i = N; i < N + M; ++i)
             engine.insert("test", static_cast<uint32_t>(i), vecs[i].data());
+        // Signal that all post-checkpoint inserts are WAL-synced.
+        std::ofstream(done_flag).close();
         ::pause();
         _exit(0);
     }
 
-    // Wait for checkpoint flag, then kill.
-    for (int i = 0; i < 100 && !std::filesystem::exists(flag); ++i)
+    // Wait for all inserts to complete (each engine.insert() syncs the WAL
+    // before returning, so done_flag means all M records are on disk).
+    for (int i = 0; i < 300 && !std::filesystem::exists(done_flag); ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    // Brief extra wait to let some post-checkpoint inserts happen.
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    ASSERT_TRUE(std::filesystem::exists(done_flag))
+        << "post-checkpoint inserts timed out (30s)";
     ::kill(pid, SIGKILL);
     int status;
     ::waitpid(pid, &status, 0);
 
-    // Recovery: all N+M nodes must be present.
+    // Every insert() that returned successfully is WAL-synced, so all N+M
+    // nodes must survive the crash.
     Engine engine(data_dir_);
     auto all = engine.search({"test", vecs[0].data(),
-                               static_cast<int>(N + M), 300});
+                               static_cast<int>(N + M), static_cast<int>(N + M)});
     EXPECT_EQ(all.size(), N + M) << "not all " << N + M << " nodes recovered";
 }
 
