@@ -65,7 +65,9 @@ jobs:
         run: pip install . --no-build-isolation
 
       - name: Run pytest
-        run: pytest python/test_bindings.py -v
+        run: |
+          pytest python/test_bindings.py -v
+          pytest python/tests/test_sdk_integration.py -v
 
   # -------------------------------------------------------------------------
   # x86 (ubuntu-latest): tests AVX2 path and verifies x86 compilation
