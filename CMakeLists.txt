@@ -53,6 +53,8 @@ endif()
 # --------------------------------------------------------------------------
 option(VECTORDB_PYTHON "Build Python bindings via pybind11" OFF)
 if(VECTORDB_PYTHON)
+    # Static libs linked into a shared .so must be compiled with -fPIC on Linux.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module NumPy)
     FetchContent_Declare(
         pybind11
