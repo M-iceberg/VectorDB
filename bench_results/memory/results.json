@@ -1,0 +1,43 @@
+{
+  "dim": 128,
+  "n": 200000,
+  "raw_bytes_per_vec": 512,
+  "peak_rss_mb": 261.796875,
+  "hnsw_overhead_mb": 126.125,
+  "hnsw_overhead_bytes_per_vec": 661.25824,
+  "total_bytes_per_vec": 1173.25824,
+  "checkpoints": [
+    {
+      "n": 50000,
+      "rss_mb": 108.40625,
+      "raw_mb": 24.4140625,
+      "overhead_mb": 45.9765625,
+      "overhead_bytes_per_vec": 964.1984,
+      "total_bytes_per_vec": 1476.1984
+    },
+    {
+      "n": 100000,
+      "rss_mb": 158.390625,
+      "raw_mb": 48.828125,
+      "overhead_mb": 71.546875,
+      "overhead_bytes_per_vec": 750.22336,
+      "total_bytes_per_vec": 1262.22336
+    },
+    {
+      "n": 150000,
+      "rss_mb": 206.671875,
+      "raw_mb": 73.2421875,
+      "overhead_mb": 95.4140625,
+      "overhead_bytes_per_vec": 666.99264,
+      "total_bytes_per_vec": 1178.99264
+    },
+    {
+      "n": 200000,
+      "rss_mb": 261.796875,
+      "raw_mb": 97.65625,
+      "overhead_mb": 126.125,
+      "overhead_bytes_per_vec": 661.25824,
+      "total_bytes_per_vec": 1173.25824
+    }
+  ]
+}

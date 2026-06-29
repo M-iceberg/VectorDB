@@ -70,6 +70,55 @@ jobs:
           pytest python/tests/test_sdk_integration.py -v
 
   # -------------------------------------------------------------------------
+  # Memory profiling: /usr/bin/time -v + Valgrind massif (x86 Linux)
+  # Runs a small insert workload (50K vectors) to measure:
+  #   - Peak RSS via /usr/bin/time -v
+  #   - Heap breakdown via ms_print (massif output)
+  # -------------------------------------------------------------------------
+  memory-profiling:
+    name: Memory profiling (Valgrind massif)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build valgrind python3-pip python3-numpy
+
+      - name: Install build dependencies
+        run: pip3 install scikit-build-core pybind11
+
+      - name: pip install
+        run: pip3 install . --no-build-isolation
+
+      - name: Install bench dependencies
+        run: pip3 install h5py
+
+      - name: Memory profile with /usr/bin/time -v
+        run: |
+          /usr/bin/time -v python3 bench/bench_memory.py \
+            --dim 128 --n 50000 --step 50000 \
+            --out /tmp/mem_results 2>&1 | tee mem_time_output.txt
+          echo "--- Peak RSS from /usr/bin/time -v ---"
+          grep "Maximum resident" mem_time_output.txt || true
+
+      - name: Memory profile with Valgrind massif
+        run: |
+          valgrind --tool=massif \
+            --massif-out-file=massif.out \
+            --pages-as-heap=yes \
+            python3 bench/bench_memory.py \
+              --dim 128 --n 5000 --step 5000 \
+              --out /tmp/mem_massif 2>/dev/null
+          echo "--- Valgrind massif peak heap ---"
+          ms_print massif.out | head -30
+
+      - name: Upload massif output
+        uses: actions/upload-artifact@v4
+        with:
+          name: massif-output
+          path: massif.out
+
+  # -------------------------------------------------------------------------
   # x86 (ubuntu-latest): tests AVX2 path and verifies x86 compilation
   # -------------------------------------------------------------------------
   test-x86:

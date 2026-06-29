@@ -2,7 +2,9 @@
 
 A vector database built from scratch in C++. Supports insert, k-NN search, delete, and metadata-filtered search using an HNSW index with SIMD-accelerated distance functions, a write-ahead log for crash safety, and a Python SDK.
 
-## Benchmark — SIFT-1M (1M vectors, dim=128, L2)
+## Benchmarks
+
+### SIFT-1M (1M vectors, dim=128, L2)
 
 | ef_search | QPS | Recall@1 | Recall@10 | Recall@100 |
 |-----------|-----|----------|-----------|------------|
@@ -16,6 +18,32 @@ Insert throughput: **177 vec/s** (single-threaded, ARM NEON, Python SDK).
 
 ![Recall vs ef_search](bench_results/sift/recall_vs_ef.png)
 ![QPS vs Recall](bench_results/sift/qps_vs_recall.png)
+
+### GloVe-1.2M (1.18M vectors, dim=200, cosine)
+
+| ef_search | QPS | Recall@1 | Recall@10 | Recall@100 |
+|-----------|-----|----------|-----------|------------|
+| 50  | 1,171 | 79.0% | 76.8% | 64.9% |
+| 100 | 1,172 | 79.0% | 76.8% | 64.9% |
+| 200 |   698 | 85.0% | 82.6% | 73.2% |
+| 400 |   408 | 89.6% | 87.3% | 79.7% |
+| 800 |   221 | 92.7% | 90.9% | 85.0% |
+
+Insert throughput: **146 vec/s**. Lower recall than SIFT reflects GloVe's known difficulty (hubness + cosine space topology) — hnswlib achieves similar numbers on this dataset.
+
+![Recall vs ef_search](bench_results/glove/recall_vs_ef.png)
+![QPS vs Recall](bench_results/glove/qps_vs_recall.png)
+
+### Memory — HNSW index overhead (dim=128, 200K vectors)
+
+| Metric | Value |
+|--------|-------|
+| Raw vector storage | 512 B/vec |
+| HNSW graph overhead | 661 B/vec |
+| **Total** | **1,173 B/vec (2.3× raw)** |
+| Peak RSS | 262 MB |
+
+See [`docs/benchmarks.md`](docs/benchmarks.md) for full profiling breakdown.
 
 ## Key features
 
