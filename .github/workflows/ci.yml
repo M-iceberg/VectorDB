@@ -144,7 +144,8 @@ jobs:
       - name: Build bench_profile (prefetch ON)
         run: |
           cmake -B build_prefetch -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DVECTORDB_PROFILE=ON
+            -DVECTORDB_PROFILE=ON \
+            -DCMAKE_CXX_FLAGS="-fno-omit-frame-pointer"
           cmake --build build_prefetch --target bench_profile
 
       - name: Build bench_profile (prefetch OFF)
@@ -183,10 +184,9 @@ jobs:
 
       - name: Flamegraph — search hot path (prefetch ON)
         run: |
-          perf record -g --call-graph dwarf -F 99 \
+          perf record -g --call-graph fp -F 99 \
             ./build_prefetch/bench/bench_profile \
-              --dim 128 --n 50000 --queries 30000 --ef 200 \
-            2>&1 || true
+              --dim 128 --n 50000 --queries 30000 --ef 200
           perf script | \
             /tmp/flamegraph/stackcollapse-perf.pl | \
             /tmp/flamegraph/flamegraph.pl \

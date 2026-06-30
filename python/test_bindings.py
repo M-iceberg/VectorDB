@@ -27,7 +27,7 @@ def test_insert_no_metadata(db):
     v = make_vec(0)
     db.insert("col", ids=0, vectors=v)
     results = db.search("col", query=v, top_k=1)
-    assert results[0]["id"] == 0
+    assert results[0]["id"] == "0"
     assert results[0]["distance"] < 1e-5
 
 
@@ -44,7 +44,7 @@ def test_string_eq_filter(db):
     results = db.search("col", query=make_vec(99), top_k=10, ef_search=50,
                         filters={"category": "ml"})
     ids = {r["id"] for r in results}
-    assert ids <= {0, 1, 2}, f"filter leaked db nodes: {ids}"
+    assert ids <= {"0", "1", "2"}, f"filter leaked db nodes: {ids}"
     assert len(ids) == 3
 
 
@@ -59,7 +59,7 @@ def test_numeric_gte_filter(db):
     results = db.search("col", query=make_vec(7), top_k=10, ef_search=50,
                         filters={"year": {"$gte": 2022.0}})
     ids = {r["id"] for r in results}
-    assert ids <= {2, 3, 4}, f"unexpected ids: {ids}"
+    assert ids <= {"2", "3", "4"}, f"unexpected ids: {ids}"
     assert len(ids) == 3
 
 
@@ -74,7 +74,7 @@ def test_numeric_lte_filter(db):
     results = db.search("col", query=make_vec(8), top_k=10, ef_search=50,
                         filters={"score": {"$lte": 20.0}})
     ids = {r["id"] for r in results}
-    assert ids <= {0, 1, 2}, f"unexpected ids: {ids}"
+    assert ids <= {"0", "1", "2"}, f"unexpected ids: {ids}"
     assert len(ids) == 3
 
 
@@ -89,7 +89,7 @@ def test_numeric_range_filter(db):
     results = db.search("col", query=make_vec(55), top_k=10, ef_search=80,
                         filters={"price": {"$gte": 3.0, "$lte": 6.0}})
     ids = {r["id"] for r in results}
-    assert ids <= {3, 4, 5, 6}, f"unexpected ids: {ids}"
+    assert ids <= {"3", "4", "5", "6"}, f"unexpected ids: {ids}"
     assert len(ids) == 4
 
 
@@ -105,7 +105,7 @@ def test_combined_filter(db):
     results = db.search("col", query=make_vec(77), top_k=10, ef_search=80,
                         filters={"cat": "A", "val": {"$gte": 2.0}})
     ids = {r["id"] for r in results}
-    assert ids == {2, 3}, f"expected {{2,3}}, got {ids}"
+    assert ids == {"2", "3"}, f"expected {{'2','3'}}, got {ids}"
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ def test_no_filter_after_metadata_inserts(db):
         db.insert("col", ids=i, vectors=v, metadata={"x": float(i)})
 
     results = db.search("col", query=vecs[5], top_k=3, ef_search=50)
-    assert results[0]["id"] == 5
+    assert results[0]["id"] == "5"
     assert results[0]["distance"] < 1e-5
 
 
@@ -153,7 +153,7 @@ def test_metadata_survives_restart(tmp_path):
     results = db2.search("col", query=make_vec(99), top_k=10, ef_search=50,
                          filters={"tag": "keep"})
     ids = {r["id"] for r in results}
-    assert ids == {0, 1, 2}, f"expected {{0,1,2}} after restart, got {ids}"
+    assert ids == {"0", "1", "2"}, f"expected {{'0','1','2'}} after restart, got {ids}"
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +178,7 @@ def test_bool_metadata(db):
     results = db.search("col", query=make_vec(99), top_k=10, ef_search=50,
                         filters={"active": "1"})
     ids = {r["id"] for r in results}
-    assert ids == {0, 1}
+    assert ids == {"0", "1"}
 
 
 # ---------------------------------------------------------------------------
