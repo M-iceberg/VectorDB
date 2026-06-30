@@ -68,8 +68,8 @@ struct SearchRequest {
 };
 
 struct SearchResult {
-    float    distance;
-    uint32_t id;
+    float       distance;
+    std::string user_id;
 };
 
 // Orchestrator: owns all collections and ties together HNSW index,
@@ -85,9 +85,11 @@ public:
     std::vector<CollectionSchema> list_collections() const;
 
     // meta is optional: pass {} or omit for vectors without metadata.
-    void insert(const std::string& collection, uint32_t id, const float* vec,
-                const MetadataEntry& meta = {});
-    void remove(const std::string& collection, uint32_t id);
+    // user_id: caller-provided string ID, or empty string to auto-assign.
+    // Returns the effective user_id (either the provided one or the auto-assigned NodeId as string).
+    std::string insert(const std::string& collection, const std::string& user_id,
+                       const float* vec, const MetadataEntry& meta = {});
+    void remove(const std::string& collection, const std::string& user_id);
 
     std::vector<SearchResult> search(const SearchRequest& req) const;
 

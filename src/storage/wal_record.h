@@ -10,7 +10,7 @@
 //
 // Types:
 //   WalRecordType::Insert     — payload is:
-//       [node_id: 4B][vec: dim*4B]
+//       [node_id: 4B][uid_len: 2B][uid: uid_len bytes][vec: dim*4B]
 //       optionally followed by metadata:
 //       [num_strings: 2B]
 //         for each: [field_len: 2B][field bytes][val_len: 2B][val bytes]
@@ -53,17 +53,22 @@ struct WalRecordHeader {
 // Payload helpers
 // ---------------------------------------------------------------------------
 
-// Insert payload: [node_id: 4B][vec: dim*4B]
+// Insert payload: [node_id: 4B][uid_len: 2B][uid: uid_len bytes][vec: dim*4B]
 // optionally followed by metadata section if meta is non-empty.
 inline std::vector<uint8_t> make_insert_payload(
-    uint32_t id, const float* vec, size_t dim,
+    uint32_t id, const std::string& user_id, const float* vec, size_t dim,
     const MetadataEntry& meta = {})
 {
-    // Base: id + vector
+    // Base: id + uid_len + uid + vector
+    uint16_t uid_len = static_cast<uint16_t>(user_id.size());
     std::vector<uint8_t> buf;
-    buf.resize(sizeof(uint32_t) + dim * sizeof(float));
-    std::memcpy(buf.data(), &id, sizeof(uint32_t));
-    std::memcpy(buf.data() + sizeof(uint32_t), vec, dim * sizeof(float));
+    size_t base_size = sizeof(uint32_t) + sizeof(uint16_t) + uid_len + dim * sizeof(float);
+    buf.resize(base_size);
+    size_t off = 0;
+    std::memcpy(buf.data() + off, &id, sizeof(uint32_t));       off += sizeof(uint32_t);
+    std::memcpy(buf.data() + off, &uid_len, sizeof(uint16_t));  off += sizeof(uint16_t);
+    std::memcpy(buf.data() + off, user_id.data(), uid_len);     off += uid_len;
+    std::memcpy(buf.data() + off, vec, dim * sizeof(float));
 
     if (meta.strings.empty() && meta.numerics.empty())
         return buf;
@@ -99,14 +104,18 @@ inline std::vector<uint8_t> make_insert_payload(
     return buf;
 }
 
-// Parse metadata section from an Insert payload, given that the vector
-// occupies bytes [4, 4 + vec_dim*4). Returns empty MetadataEntry if no
-// metadata section is present.
+// Parse metadata section from an Insert payload.
+// New format: [node_id: 4B][uid_len: 2B][uid: uid_len bytes][vec: dim*4B][metadata...]
+// Returns empty MetadataEntry if no metadata section is present.
 inline MetadataEntry parse_insert_metadata(
     const void* payload, uint32_t payload_len, size_t vec_dim)
 {
     MetadataEntry meta;
-    size_t base = sizeof(uint32_t) + vec_dim * sizeof(float);
+    // Read uid_len at offset 4 to find where the vector starts.
+    if (payload_len < sizeof(uint32_t) + sizeof(uint16_t)) return meta;
+    uint16_t uid_len;
+    std::memcpy(&uid_len, static_cast<const uint8_t*>(payload) + sizeof(uint32_t), sizeof(uint16_t));
+    size_t base = sizeof(uint32_t) + sizeof(uint16_t) + uid_len + vec_dim * sizeof(float);
     if (payload_len <= base) return meta;
 
     const uint8_t* p   = static_cast<const uint8_t*>(payload) + base;

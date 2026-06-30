@@ -45,6 +45,58 @@ Insert throughput: **146 vec/s**. Lower recall than SIFT reflects GloVe's known 
 
 See [`docs/benchmarks.md`](docs/benchmarks.md) for full profiling breakdown.
 
+### SIMD profiling — what does distance compute actually cost?
+
+Profiled with macOS `sample` during a 100K-query search run (N=100K, dim=128, ef=200, ARM NEON):
+
+| Component | % of search time |
+|-----------|----------------:|
+| `unordered_set` visited-node tracking | **60.6%** |
+| Graph pointer chasing / arithmetic | 17.7% |
+| **NeonL2::compute** (NEON SIMD) | **12.4%** |
+| `priority_queue::push` | 4.0% |
+| Other | 5.3% |
+
+**Finding 1:** Distance compute is only ~12% of search time. NEON SIMD makes it fast — it is not the bottleneck.
+
+**Finding 2:** The real bottleneck is `std::unordered_set` for visited-node tracking — 61% of search time spent on hash table alloc/insert/free per query.
+
+**Fix applied:** replaced with a flat `std::vector<uint8_t>(max_id+1, 0)` — one allocation, O(1) byte ops, no malloc during search.
+
+| Metric | Before | After |
+|--------|-------:|------:|
+| Search QPS | 1,669 | **2,738** (+64%) |
+| Insert throughput | 1,624 vec/s | **2,355 vec/s** (+45%) |
+
+**Finding 3:** `__builtin_prefetch` in `compute_batch()` has no measurable effect (±3%) because HNSW search calls `compute()` one neighbor at a time via `dist_q()` — `compute_batch()` is never invoked on the hot search path.
+
+### After all optimizations — final search-phase breakdown (prefetch ON)
+
+Applied five optimizations (flat `uint8_t` visited array, flat vector store, flat node array, flat CSR adj list, look-ahead graph prefetch). Final QPS: **4,459** (+167% vs baseline).
+
+`sample` profile of the search phase only (N=100K, dim=128, ef=200):
+
+| Component | % of search time |
+|-----------|----------------:|
+| `NeonL2::compute` (NEON SIMD + memory stall) | **51%** |
+| Visited check + prefetch loop overhead | 38% |
+| `priority_queue::push` | 10% |
+| visited array reset (`bzero`) + introsort | <1% |
+
+Distance compute now accounts for 51% of samples (vs 12% before) — not because it got slower, but because all the other overheads shrank.
+
+### Prefetch effectiveness — `VORTEXDB_NO_PREFETCH` comparison
+
+| | With prefetch (⑤) | Without prefetch (①–④) |
+|--|--|--|
+| QPS | **4,407** | 4,219 |
+| Per-query latency | 0.226 ms | 0.237 ms |
+| Gain | **+4.5%** at N=100K | — |
+
+At N=100K the 51 MB vector store partially fits in L3 cache — prefetch latency hiding is modest. At N=1M (512 MB, guaranteed DRAM miss per hop) the gain is proportionally larger. This is the same reason hnswlib and faiss invest in graph prefetch for production-scale indexes.
+
+See [`docs/search_optimizations.md`](docs/search_optimizations.md) for the full optimization log with before/after results for each step.
+
 ## Key features
 
 - **HNSW index** — sub-linear approximate nearest-neighbor search

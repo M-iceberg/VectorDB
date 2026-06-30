@@ -53,23 +53,23 @@ TEST_F(EngineFullFlowTest, CreateInsertSearchDeleteSearch) {
     std::vector<std::vector<float>> vecs(N, std::vector<float>(dim));
     for (size_t i = 0; i < N; ++i) {
         vecs[i] = random_vec(dim, rng);
-        engine.insert("items", static_cast<uint32_t>(i), vecs[i].data());
+        engine.insert("items", std::to_string(i), vecs[i].data());
     }
 
     // Search — query closest to node 0's vector
     auto results = engine.search({"items", vecs[0].data(), 5, 64});
     ASSERT_FALSE(results.empty());
-    EXPECT_EQ(results[0].id, 0u);  // exact match should be nearest
+    EXPECT_EQ(results[0].user_id, "0");  // exact match should be nearest
 
     // Delete half the nodes
     for (uint32_t i = 0; i < N / 2; ++i)
-        engine.remove("items", i);
+        engine.remove("items", std::to_string(i));
 
     // Search again — deleted nodes must not appear
     auto results2 = engine.search({"items", vecs[0].data(), 5, 64});
     for (auto& r : results2)
-        EXPECT_GE(r.id, static_cast<uint32_t>(N / 2))
-            << "deleted id " << r.id << " appeared in results";
+        EXPECT_GE(std::stoi(r.user_id), static_cast<int>(N / 2))
+            << "deleted id " << r.user_id << " appeared in results";
 }
 
 // ---------------------------------------------------------------------------
@@ -151,7 +151,7 @@ TEST_F(EngineFullFlowTest, FullFlowWithMetadata) {
         vecs[i] = random_vec(dim, rng);
         MetadataEntry meta;
         meta.strings["type"] = (i % 2 == 0) ? "article" : "video";
-        engine.insert("docs", static_cast<uint32_t>(i), vecs[i].data(), meta);
+        engine.insert("docs", std::to_string(i), vecs[i].data(), meta);
     }
 
     auto q = random_vec(dim, rng);
@@ -167,11 +167,11 @@ TEST_F(EngineFullFlowTest, FullFlowWithMetadata) {
 
     ASSERT_EQ((int)results.size(), 5);
     for (auto& r : results)
-        EXPECT_EQ(r.id % 2, 0u) << "id " << r.id << " is not an article";
+        EXPECT_EQ(std::stoi(r.user_id) % 2, 0) << "id " << r.user_id << " is not an article";
 
     // Remove all articles
     for (uint32_t i = 0; i < N; i += 2)
-        engine.remove("docs", i);
+        engine.remove("docs", std::to_string(i));
 
     // Filtered search should now be empty
     auto results2 = engine.search(req);
@@ -194,8 +194,8 @@ TEST_F(EngineFullFlowTest, MultipleCollectionsIndependent) {
 
     auto v1 = random_vec(dim, rng);
     auto v2 = random_vec(dim, rng);
-    engine.insert("c1", 1, v1.data());
-    engine.insert("c2", 2, v2.data());
+    engine.insert("c1", "1", v1.data());
+    engine.insert("c2", "2", v2.data());
 
     // Searching c1 must not return c2's node and vice versa.
     auto r1 = engine.search({"c1", v1.data(), 1, 10});
@@ -203,8 +203,8 @@ TEST_F(EngineFullFlowTest, MultipleCollectionsIndependent) {
 
     ASSERT_EQ(r1.size(), 1u);
     ASSERT_EQ(r2.size(), 1u);
-    EXPECT_EQ(r1[0].id, 1u);
-    EXPECT_EQ(r2[0].id, 2u);
+    EXPECT_EQ(r1[0].user_id, "1");
+    EXPECT_EQ(r2[0].user_id, "2");
 }
 
 }  // namespace

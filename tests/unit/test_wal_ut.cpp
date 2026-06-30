@@ -208,8 +208,8 @@ TEST_F(WalTest, ReplayInsertAndDelete) {
 
     {
         Wal wal(path_);
-        auto p0 = make_insert_payload(10, vec0.data(), dim);
-        auto p1 = make_insert_payload(20, vec1.data(), dim);
+        auto p0 = make_insert_payload(10, "10", vec0.data(), dim);
+        auto p1 = make_insert_payload(20, "20", vec1.data(), dim);
         auto pd = make_delete_payload(10);
         wal.append(WalRecordType::Insert, p0.data(), p0.size());
         wal.append(WalRecordType::Insert, p1.data(), p1.size());
@@ -222,7 +222,7 @@ TEST_F(WalTest, ReplayInsertAndDelete) {
     std::vector<uint32_t> deletes;
 
     wal.replay(0, dim,
-        [&](uint32_t id, const float* vec, size_t d, const MetadataEntry&) {
+        [&](uint32_t id, const std::string& /*user_id*/, const float* vec, size_t d, const MetadataEntry&) {
             inserts.push_back({id, std::vector<float>(vec, vec + d)});
         },
         [&](uint32_t id) {
@@ -294,7 +294,7 @@ TEST_F(WalTest, ReplayStartLsn) {
     {
         Wal wal(path_);
         for (uint32_t i = 0; i < 4; ++i) {
-            auto p = make_insert_payload(i, vec.data(), dim);
+            auto p = make_insert_payload(i, std::to_string(i), vec.data(), dim);
             wal.append(WalRecordType::Insert, p.data(), p.size());
         }
         wal.sync();
@@ -303,7 +303,7 @@ TEST_F(WalTest, ReplayStartLsn) {
     Wal wal(path_);
     std::vector<uint32_t> ids;
     wal.replay(2, dim,
-        [&](uint32_t id, const float*, size_t, const MetadataEntry&) { ids.push_back(id); },
+        [&](uint32_t id, const std::string&, const float*, size_t, const MetadataEntry&) { ids.push_back(id); },
         [&](uint32_t) {});
 
     ASSERT_EQ(ids.size(), 2u);
@@ -325,7 +325,7 @@ TEST_F(WalTest, CrashAfterSidecarBeforeRename) {
     {
         Wal wal(path_);
         for (uint32_t i = 0; i < 5; ++i) {
-            auto p = make_insert_payload(i, vec.data(), dim);
+            auto p = make_insert_payload(i, std::to_string(i), vec.data(), dim);
             wal.append(WalRecordType::Insert, p.data(), p.size());
         }
         wal.sync();
@@ -346,7 +346,7 @@ TEST_F(WalTest, CrashAfterSidecarBeforeRename) {
     // (the post-checkpoint records). IDs 0,1,2 may also appear (idempotent).
     std::vector<uint32_t> ids;
     wal.replay(3, dim,
-        [&](uint32_t id, const float*, size_t, const MetadataEntry&) { ids.push_back(id); },
+        [&](uint32_t id, const std::string&, const float*, size_t, const MetadataEntry&) { ids.push_back(id); },
         [&](uint32_t) {});
 
     // IDs 3 and 4 must be present — they were not yet checkpointed.

@@ -52,7 +52,7 @@ TEST_F(GraphSerializerTest, RoundtripGraphStructure) {
 
     HnswIndex original(cfg);
     for (size_t i = 0; i < N; ++i)
-        original.insert(static_cast<NodeId>(i), vecs[i].data());
+        original.insert_for_recovery(static_cast<NodeId>(i), vecs[i].data());
 
     GraphSerializer::serialize(original, path_);
     auto restored = GraphSerializer::deserialize(path_, cfg);
@@ -96,7 +96,7 @@ TEST_F(GraphSerializerTest, SearchRecallUnchangedAfterRoundtrip) {
 
     HnswIndex original(cfg);
     for (size_t i = 0; i < N; ++i)
-        original.insert(static_cast<NodeId>(i), vecs[i].data());
+        original.insert_for_recovery(static_cast<NodeId>(i), vecs[i].data());
 
     // Run queries before serialization.
     std::vector<std::vector<float>> queries(Q, std::vector<float>(dim));
@@ -151,7 +151,7 @@ TEST_F(GraphSerializerTest, LargeScaleRecallUnchangedAfterRoundtrip) {
 
     HnswIndex original(cfg);
     for (size_t i = 0; i < N; ++i)
-        original.insert(static_cast<NodeId>(i), vecs[i].data());
+        original.insert_for_recovery(static_cast<NodeId>(i), vecs[i].data());
 
     // Run Q queries before serialization.
     std::vector<std::vector<float>> queries(Q, std::vector<float>(dim));
@@ -198,7 +198,7 @@ TEST_F(GraphSerializerTest, TombstonesPreservedAfterRoundtrip) {
 
     HnswIndex original(cfg);
     for (size_t i = 0; i < N; ++i)
-        original.insert(static_cast<NodeId>(i), vecs[i].data());
+        original.insert_for_recovery(static_cast<NodeId>(i), vecs[i].data());
 
     // Delete every even node.
     for (size_t i = 0; i < N; i += 2)
@@ -247,7 +247,7 @@ TEST_F(GraphSerializerTest, DimMismatchThrowsOnDeserialize) {
     for (uint32_t i = 0; i < 10; ++i) {
         std::vector<float> v(dim);
         for (auto& x : v) x = d(rng);
-        index.insert(i, v.data());
+        index.insert_for_recovery(i, v.data());
     }
     GraphSerializer::serialize(index, path_);
 
@@ -271,7 +271,7 @@ TEST_F(GraphSerializerTest, TruncatedFileThrows) {
     for (uint32_t i = 0; i < 20; ++i) {
         std::vector<float> v(dim);
         for (auto& x : v) x = d(rng);
-        index.insert(i, v.data());
+        index.insert_for_recovery(i, v.data());
     }
     GraphSerializer::serialize(index, path_);
 
@@ -300,14 +300,14 @@ TEST_F(GraphSerializerTest, InsertAfterDeserialize) {
 
     HnswIndex original(cfg);
     for (size_t i = 0; i < N; ++i)
-        original.insert(static_cast<NodeId>(i), vecs[i].data());
+        original.insert_for_recovery(static_cast<NodeId>(i), vecs[i].data());
 
     GraphSerializer::serialize(original, path_);
     auto restored = GraphSerializer::deserialize(path_, cfg);
 
     // Insert M more nodes into the restored index.
     for (size_t i = N; i < N + M; ++i)
-        restored->insert(static_cast<NodeId>(i), vecs[i].data());
+        restored->insert_for_recovery(static_cast<NodeId>(i), vecs[i].data());
 
     EXPECT_EQ(restored->size(), N + M);
 
@@ -337,7 +337,7 @@ TEST_F(GraphSerializerTest, OverwriteExistingSnapshot) {
     for (uint32_t i = 0; i < 50; ++i) {
         std::vector<float> v(dim);
         for (auto& x : v) x = d(rng);
-        first.insert(i, v.data());
+        first.insert_for_recovery(i, v.data());
     }
     GraphSerializer::serialize(first, path_);
 
@@ -346,7 +346,7 @@ TEST_F(GraphSerializerTest, OverwriteExistingSnapshot) {
     for (uint32_t i = 0; i < 20; ++i) {
         std::vector<float> v(dim);
         for (auto& x : v) x = d(rng);
-        second.insert(i, v.data());
+        second.insert_for_recovery(i, v.data());
     }
     GraphSerializer::serialize(second, path_);
 
@@ -368,7 +368,7 @@ TEST_F(GraphSerializerTest, RestoreOnNonEmptyIndexThrows) {
     HnswIndex index(cfg);
     std::vector<float> v(dim);
     for (auto& x : v) x = d(rng);
-    index.insert(0, v.data());
+    index.insert_for_recovery(0, v.data());
 
     std::vector<HnswIndex::NodeData> empty_nodes;
     EXPECT_THROW(index.restore(kInvalidNode, -1, 0, std::move(empty_nodes)),

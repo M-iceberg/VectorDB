@@ -7,6 +7,7 @@
 //   vectors.vdb   — mmap-backed raw vector storage
 //   graph.bin     — latest graph checkpoint (may not exist before first checkpoint)
 //   metadata.bin  — latest metadata index snapshot (may not exist before first checkpoint)
+//   id_map.bin    — binary id map: [count:4B][node_id:4B][uid_len:2B][uid:N]...
 // -----------------------------------------------------------------------------
 #include "engine.h"
 #include "core/hnsw_index.h"
@@ -17,6 +18,7 @@
 #include "storage/wal.h"
 #include "storage/wal_record.h"
 #include <algorithm>
+#include <cstring>
 #include <fcntl.h>
 #include <filesystem>
 #include <limits>
@@ -40,6 +42,8 @@ struct CollectionState {
     std::unique_ptr<VectorFile>    vf;
     std::unique_ptr<HnswIndex>     index;
     std::unique_ptr<MetadataIndex> meta;
+    std::unordered_map<std::string, NodeId> user_to_node;
+    std::unordered_map<NodeId, std::string> node_to_user;
 };
 
 // ---------------------------------------------------------------------------
@@ -98,6 +102,52 @@ struct Engine::Impl {
         return s;
     }
 
+    // Load id_map.bin if present: [count:4B][node_id:4B][uid_len:2B][uid:N]...
+    static void load_id_map(const std::string& path, CollectionState& state) {
+        int fd = ::open(path.c_str(), O_RDONLY);
+        if (fd < 0) return;  // file doesn't exist yet
+
+        uint32_t count = 0;
+        if (::read(fd, &count, sizeof(count)) != sizeof(count)) {
+            ::close(fd); return;
+        }
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t node_id = 0;
+            uint16_t uid_len = 0;
+            if (::read(fd, &node_id, sizeof(node_id)) != sizeof(node_id)) break;
+            if (::read(fd, &uid_len, sizeof(uid_len)) != sizeof(uid_len)) break;
+            std::string uid(uid_len, '\0');
+            if (::read(fd, uid.data(), uid_len) != uid_len) break;
+            state.user_to_node[uid]      = node_id;
+            state.node_to_user[node_id]  = uid;
+        }
+        ::close(fd);
+    }
+
+    // Write id_map.bin: [count:4B][node_id:4B][uid_len:2B][uid:N]...
+    static void save_id_map(const std::string& path, const CollectionState& state) {
+        std::string tmp = path + ".tmp";
+        int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0)
+            throw std::runtime_error("Engine: cannot write id_map: " + tmp);
+
+        uint32_t count = static_cast<uint32_t>(state.user_to_node.size());
+        ::write(fd, &count, sizeof(count));
+        for (auto& [uid, node_id] : state.user_to_node) {
+            uint16_t uid_len = static_cast<uint16_t>(uid.size());
+            ::write(fd, &node_id, sizeof(node_id));
+            ::write(fd, &uid_len, sizeof(uid_len));
+            ::write(fd, uid.data(), uid_len);
+        }
+        if (::fsync(fd) != 0) {
+            ::close(fd);
+            throw std::runtime_error("Engine: fsync id_map failed");
+        }
+        ::close(fd);
+        if (::rename(tmp.c_str(), path.c_str()) != 0)
+            throw std::runtime_error("Engine: rename id_map failed");
+    }
+
     // Open or recover a collection from disk.
     void open_collection(const CollectionSchema& schema) {
         const std::string& name = schema.name;
@@ -128,17 +178,24 @@ struct Engine::Impl {
             state.meta = std::make_unique<MetadataIndex>();
         }
 
+        // Load id_map checkpoint if present (covers checkpoint-era entries).
+        std::string idmap_path = dir + "/id_map.bin";
+        load_id_map(idmap_path, state);
+
         // Replay WAL records since the last checkpoint.
         // Passes vec_dim so replay() can locate the metadata section in each
         // Insert payload. Both HnswIndex and MetadataIndex are updated.
+        // WAL replay also rebuilds/updates the id maps from the user_id field.
         auto& idx  = *state.index;
         auto& meta = *state.meta;
         state.wal->replay(
             0,
             schema.dim,
-            [&](uint32_t id, const float* vec, size_t /*dim*/,
-                const MetadataEntry& m) {
-                idx.insert(id, vec);
+            [&](uint32_t id, const std::string& user_id, const float* vec,
+                size_t /*dim*/, const MetadataEntry& m) {
+                idx.insert_for_recovery(id, vec);
+                state.user_to_node[user_id] = id;
+                state.node_to_user[id]      = user_id;
                 for (auto& [f, v] : m.strings)  meta.insert_string(f, v, id);
                 for (auto& [f, v] : m.numerics) meta.insert_numeric(f, v, id);
             },
@@ -204,38 +261,64 @@ void Engine::drop_collection(const std::string& name) {
     fs::remove_all(impl_->col_dir(name));
 }
 
-void Engine::insert(const std::string& collection, uint32_t id,
-                    const float* vec, const MetadataEntry& meta) {
+std::string Engine::insert(const std::string& collection, const std::string& user_id,
+                           const float* vec, const MetadataEntry& meta) {
     std::unique_lock lock(impl_->mu);
     auto it = impl_->cols.find(collection);
     if (it == impl_->cols.end())
         throw std::runtime_error("Engine: collection not found: " + collection);
     auto& state = it->second;
 
-    auto payload = make_insert_payload(id, vec, state.schema.dim, meta);
-    state.wal->append(WalRecordType::Insert, payload.data(),
-                      static_cast<uint32_t>(payload.size()));
-    state.wal->sync();
-    state.index->insert(id, vec);
+    NodeId node_id;
+    std::string effective_id;
+    auto uid_it = state.user_to_node.find(user_id);
+    if (!user_id.empty() && uid_it != state.user_to_node.end()) {
+        // Re-insert of existing user_id (e.g. after remove): reuse the same NodeId.
+        effective_id = user_id;
+        node_id = uid_it->second;
+        auto payload = make_insert_payload(node_id, effective_id, vec, state.schema.dim, meta);
+        state.wal->append(WalRecordType::Insert, payload.data(),
+                          static_cast<uint32_t>(payload.size()));
+        state.wal->sync();
+        state.index->insert_for_recovery(node_id, vec);
+    } else {
+        // New user_id (or empty → auto-assign): let HnswIndex pick the NodeId.
+        node_id = state.index->insert(vec);
+        effective_id = user_id.empty() ? std::to_string(node_id) : user_id;
+        state.user_to_node[effective_id] = node_id;
+        state.node_to_user[node_id] = effective_id;
+        auto payload = make_insert_payload(node_id, effective_id, vec, state.schema.dim, meta);
+        state.wal->append(WalRecordType::Insert, payload.data(),
+                          static_cast<uint32_t>(payload.size()));
+        state.wal->sync();
+    }
+
     state.vf->append(vec);
 
-    for (auto& [f, v] : meta.strings)  state.meta->insert_string(f, v, id);
-    for (auto& [f, v] : meta.numerics) state.meta->insert_numeric(f, v, id);
+    for (auto& [f, v] : meta.strings)  state.meta->insert_string(f, v, node_id);
+    for (auto& [f, v] : meta.numerics) state.meta->insert_numeric(f, v, node_id);
+    return effective_id;
 }
 
-void Engine::remove(const std::string& collection, uint32_t id) {
+void Engine::remove(const std::string& collection, const std::string& user_id) {
     std::unique_lock lock(impl_->mu);
     auto it = impl_->cols.find(collection);
     if (it == impl_->cols.end())
         throw std::runtime_error("Engine: collection not found: " + collection);
     auto& state = it->second;
 
-    auto payload = make_delete_payload(id);
+    auto uid_it = state.user_to_node.find(user_id);
+    if (uid_it == state.user_to_node.end())
+        return;  // user_id not found — nothing to remove
+    NodeId node_id = uid_it->second;
+
+    auto payload = make_delete_payload(node_id);
     state.wal->append(WalRecordType::Delete, payload.data(),
                       static_cast<uint32_t>(payload.size()));
     state.wal->sync();
-    state.index->remove(id);
-    state.meta->remove(id);
+    state.index->remove(node_id);
+    state.meta->remove(node_id);
+    // Do NOT erase from id maps — keep mapping for re-insert consistency.
 }
 
 std::vector<SearchResult> Engine::search(const SearchRequest& req) const {
@@ -283,9 +366,13 @@ std::vector<SearchResult> Engine::search(const SearchRequest& req) const {
 
     std::vector<SearchResult> results;
     results.reserve(static_cast<size_t>(req.top_k));
-    for (auto& [dist, id] : raw) {
-        if (has_filter && !allowlist.count(id)) continue;
-        results.push_back({dist, id});
+    for (auto& [dist, node_id] : raw) {
+        if (has_filter && !allowlist.count(node_id)) continue;
+        auto uid_it = state.node_to_user.find(node_id);
+        std::string uid = (uid_it != state.node_to_user.end())
+                          ? uid_it->second
+                          : std::to_string(node_id);
+        results.push_back({dist, std::move(uid)});
         if (static_cast<int>(results.size()) == req.top_k) break;
     }
     return results;
@@ -299,11 +386,12 @@ void Engine::checkpoint(const std::string& collection) {
     auto& state = it->second;
 
     std::string dir = impl_->col_dir(collection);
-    // Serialize graph first, then metadata, then truncate WAL.
-    // Graph + metadata must be on disk before WAL truncation so a crash
+    // Serialize graph first, then metadata, then id_map, then truncate WAL.
+    // All snapshots must be on disk before WAL truncation so a crash
     // between the two steps always leaves a recoverable state.
     GraphSerializer::serialize(*state.index, dir + "/graph.bin");
     MetadataSerializer::serialize(*state.meta, dir + "/metadata.bin");
+    Impl::save_id_map(dir + "/id_map.bin", state);
 
     Lsn ckpt_lsn = state.wal->current_lsn();
     state.wal->truncate_before(ckpt_lsn);

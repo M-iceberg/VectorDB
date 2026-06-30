@@ -73,10 +73,11 @@ public:
     // in-memory state (HNSW graph + MetadataIndex) from WAL records since the
     // last checkpoint. Checkpoint records are silently skipped.
     // vec_dim is required to correctly locate the metadata section in Insert
-    // payloads (which follow immediately after [id: 4B][vec: dim*4B]).
+    // payloads (which follow after [node_id: 4B][uid_len: 2B][uid: N][vec: dim*4B]).
     void replay(Lsn start_lsn,
                 size_t vec_dim,
-                std::function<void(uint32_t id, const float* vec, size_t dim,
+                std::function<void(uint32_t id, const std::string& user_id,
+                                   const float* vec, size_t dim,
                                    const MetadataEntry&)> on_insert,
                 std::function<void(uint32_t id)> on_delete) const;
 

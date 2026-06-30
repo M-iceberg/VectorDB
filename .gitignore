@@ -1,5 +1,6 @@
 build/
 build_release/
+build_*/
 .cache/
 *.o
 *.a
@@ -16,3 +17,11 @@ python/vectordb/_vectordb*.so
 python/vectordb/__pycache__/
 python/__pycache__/
 python/tests/__pycache__/
+
+# Benchmark run artifacts (db files created during benchmark execution)
+bench_results/*/db/
+bench_results/*/*/db/
+
+# HDF5 dataset files
+*.h5
+*.hdf5

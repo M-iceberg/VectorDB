@@ -84,7 +84,7 @@ TEST_F(E2ETest, Insert10KSearchDeleteSearch) {
     std::vector<std::vector<float>> vecs(N, std::vector<float>(dim));
     for (size_t i = 0; i < N; ++i) {
         vecs[i] = random_vec(dim, rng);
-        engine.insert("test", static_cast<uint32_t>(i), vecs[i].data());
+        engine.insert("test", std::to_string(i), vecs[i].data());
     }
 
     std::unordered_set<uint32_t> live;
@@ -98,13 +98,13 @@ TEST_F(E2ETest, Insert10KSearchDeleteSearch) {
         ASSERT_FALSE(results.empty());
         uint32_t gt = brute_force_nn(vecs, live, query);
         for (auto& r : results)
-            if (r.id == gt) { ++hits_before; break; }
+            if (std::stoul(r.user_id) == gt) { ++hits_before; break; }
     }
     EXPECT_GE(hits_before, Q * 8 / 10) << "recall@1 before delete < 80%";
 
     // Delete nodes 0..N_del-1.
     for (uint32_t i = 0; i < N_del; ++i) {
-        engine.remove("test", i);
+        engine.remove("test", std::to_string(i));
         live.erase(i);
     }
 
@@ -114,11 +114,11 @@ TEST_F(E2ETest, Insert10KSearchDeleteSearch) {
         auto query = random_vec(dim, rng);
         auto results = engine.search({"test", query.data(), top_k, ef});
         for (auto& r : results)
-            EXPECT_GE(r.id, static_cast<uint32_t>(N_del))
-                << "deleted id " << r.id << " appeared in results";
+            EXPECT_GE(std::stoul(r.user_id), static_cast<unsigned long>(N_del))
+                << "deleted id " << r.user_id << " appeared in results";
         uint32_t gt = brute_force_nn(vecs, live, query);
         for (auto& r : results)
-            if (r.id == gt) { ++hits_after; break; }
+            if (std::stoul(r.user_id) == gt) { ++hits_after; break; }
     }
     EXPECT_GE(hits_after, Q * 7 / 10) << "recall@1 after delete < 70%";
 }
@@ -150,11 +150,11 @@ TEST_F(E2ETest, ScaleCrashRecovery) {
         Engine engine(data_dir_);
         engine.create_collection(make_schema(dim));
         for (size_t i = 0; i < N; ++i)
-            engine.insert("test", static_cast<uint32_t>(i), vecs[i].data());
+            engine.insert("test", std::to_string(i), vecs[i].data());
         engine.checkpoint("test");
         std::ofstream(ckpt_flag).close();
         for (size_t i = N; i < N + M; ++i)
-            engine.insert("test", static_cast<uint32_t>(i), vecs[i].data());
+            engine.insert("test", std::to_string(i), vecs[i].data());
         // Signal that all post-checkpoint inserts are WAL-synced.
         std::ofstream(done_flag).close();
         ::pause();

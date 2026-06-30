@@ -44,11 +44,10 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include <queue>
 #include <random>
 #include <stdexcept>
-#include <unordered_map>
-#include <unordered_set>
 
 namespace vectordb {
 
@@ -60,26 +59,62 @@ struct HnswIndex::Impl {
     HnswConfig cfg;
     std::unique_ptr<DistanceCompute> dc;
 
-    // Graph structure: id → node (layer assignment + per-layer neighbor lists + tombstone flag).
-    // Used during graph traversal — finding neighbors never needs the raw float data.
-    std::unordered_map<NodeId, HnswNode> nodes;
+    // Graph structure: flat array indexed by NodeId.
+    // nodes_flat_[id] is valid when node.id != kInvalidNode (default-constructed nodes are invalid).
+    // Direct array access eliminates the hash lookup in the search_layer hot path.
+    std::vector<HnswNode> nodes_flat_;
 
-    // Vector data: id → raw float array.
-    // Kept separate from nodes because the two are accessed in different patterns:
-    // graph traversal only touches nodes (compact, cache-friendly), while distance
-    // computation only touches vecs. Merging them would bloat the graph traversal
-    // working set and hurt cache efficiency.
-    //
-    // TODO: replace this map with VectorFile (Day 13). Currently both exist:
-    // Engine::insert() writes to VectorFile AND fills this map. Search uses only
-    // this map — VectorFile is never read during search. Once this map is removed
-    // and search reads from VectorFile instead, recovery must also replay WAL into
-    // VectorFile (not just HnswIndex) to keep them in sync.
-    std::unordered_map<NodeId, std::vector<float>> vecs;
+    void grow_nodes(NodeId id) {
+        if (id >= nodes_flat_.size())
+            nodes_flat_.resize(id + 1);  // default-constructs with id = kInvalidNode
+    }
+    bool node_exists(NodeId id) const {
+        return id < nodes_flat_.size() && nodes_flat_[id].id != kInvalidNode;
+    }
 
-    NodeId entry_point = kInvalidNode;
-    int    max_layer   = -1;
-    size_t live_count  = 0;
+    // Layer-0 adjacency: flat CSR array for the hot search path.
+    // adj0_[id * M0 + k]   = k-th neighbor of node id at layer 0 (kInvalidNode = empty slot)
+    // adj0_count_[id]       = number of valid neighbors (≤ cfg.M0)
+    // Both are indexed by NodeId and grown with grow_adj0() on insert.
+    // Upper-layer neighbors (layer ≥ 1) remain in nodes_flat_[id].neighbors[layer].
+    std::vector<NodeId>  adj0_;
+    std::vector<uint8_t> adj0_count_;
+
+    void grow_adj0(NodeId id) {
+        size_t needed = (size_t)(id + 1) * cfg.M0;
+        if (needed > adj0_.size()) {
+            adj0_.resize(needed, kInvalidNode);
+            adj0_count_.resize(id + 1, 0);
+        }
+    }
+    NodeId*       adj0_ptr(NodeId id)       { return adj0_.data() + (size_t)id * cfg.M0; }
+    const NodeId* adj0_ptr(NodeId id) const { return adj0_.data() + (size_t)id * cfg.M0; }
+
+    // Vector data: flat packed array, indexed as vecs_flat_[id * dim .. (id+1)*dim).
+    // Requires NodeIds to be dense (0..max_node_id_). Gaps from deletes waste one slot
+    // (dim * sizeof(float) = 512 B for dim=128) but enable zero-indirection access:
+    //   vec_ptr(id) = vecs_flat_.data() + id * cfg.dim  ← one multiply-add, no hash lookup
+    // This makes dist_q() and graph prefetch cache-friendly.
+    std::vector<float> vecs_flat_;
+
+    NodeId entry_point  = kInvalidNode;
+    int    max_layer    = -1;
+    size_t live_count   = 0;
+    NodeId max_node_id_ = 0;  // largest NodeId ever inserted; sizes vecs_flat_ and visited array
+    NodeId next_id_     = 0;  // next auto-assigned NodeId for insert()
+
+    float*       vec_ptr(NodeId id)       { return vecs_flat_.data() + id * cfg.dim; }
+    const float* vec_ptr(NodeId id) const { return vecs_flat_.data() + id * cfg.dim; }
+
+    // Grow vecs_flat_ to accommodate id, then copy vec into its slot.
+    void store_vec(NodeId id, const float* vec) {
+        size_t needed = (size_t)(id + 1) * cfg.dim;
+        if (needed > vecs_flat_.size()) {
+            vecs_flat_.resize(needed, 0.0f);
+            if (id > max_node_id_) max_node_id_ = id;
+        }
+        std::memcpy(vec_ptr(id), vec, cfg.dim * sizeof(float));
+    }
 
     std::mt19937 rng{42};  // Mersenne Twister random number generator for layer assignment; fixed seed for reproducibility
     double ml;  // 1 / ln(M) — controls layer assignment probability; larger M → smaller ml → fewer high-layer nodes
@@ -92,15 +127,14 @@ struct HnswIndex::Impl {
         , ml(1.0 / std::log(static_cast<double>(c.M)))
     {}
 
-    // Distance between two stored nodes (both looked up from vecs).
+    // Distance between two stored nodes.
     float dist(NodeId a, NodeId b) const {
-        return dc->compute(vecs.at(a).data(), vecs.at(b).data(), cfg.dim);
+        return dc->compute(vec_ptr(a), vec_ptr(b), cfg.dim);
     }
 
     // Distance from an external query vector to a stored node.
-    // query is a raw pointer — the query vector is not in vecs (not yet inserted or never will be).
     float dist_q(const float* query, NodeId b) const {
-        return dc->compute(query, vecs.at(b).data(), cfg.dim);
+        return dc->compute(query, vec_ptr(b), cfg.dim);
     }
 
     // Sample a random layer using the exponential distribution from the paper.
@@ -131,12 +165,14 @@ struct HnswIndex::Impl {
         // vector<DistId> is the underlying storage; must be explicit here because a custom comparator is provided.
         std::priority_queue<DistId, std::vector<DistId>, decltype(cmp_max)> W(cmp_max);
         std::priority_queue<DistId, std::vector<DistId>, decltype(cmp_min)> C(cmp_min);
-        std::unordered_set<NodeId> visited;
+        // Flat visited array: O(1) lookup/insert, one allocation vs unordered_set's many.
+        // max_node_id_ + 1 bytes; fits in L2 cache for N <= ~100K (12.5 KB).
+        std::vector<uint8_t> visited(max_node_id_ + 1, 0);
 
         float ep_dist = dist_q(query, ep);
         W.push({ep_dist, ep});
         C.push({ep_dist, ep});
-        visited.insert(ep);
+        visited[ep] = 1;
 
         while (!C.empty()) {
             // Always expand the closest unexplored candidate first (C is a min-heap).
@@ -146,23 +182,37 @@ struct HnswIndex::Impl {
             // worst result in W, no future expansion can improve W — stop early.
             if (candidate_dist > W.top().first) break;
 
-            const auto& candidate_nbrs = nodes.at(candidate).neighbors;
-            if (layer >= static_cast<int>(candidate_nbrs.size())) continue;
-
-            // Expand: visit each neighbor of this candidate at the current layer.
-            for (NodeId neighbor : candidate_nbrs[layer]) {
-                if (neighbor == kInvalidNode) continue;
-                if (!visited.insert(neighbor).second) continue;  // skip already-seen nodes
+            // Expand: visit each neighbor at this layer.
+            // Layer 0 reads from the flat CSR adj0_ array (one multiply-add, no pointer chase).
+            // Upper layers fall back to the per-node neighbor vector.
+            auto expand = [&](NodeId neighbor) {
+                if (neighbor == kInvalidNode) return;
+                if (visited[neighbor]) return;
+                visited[neighbor] = 1;
 
                 float neighbor_dist = dist_q(query, neighbor);
                 float worst_dist    = W.top().first;
-
-                // Add neighbor to both heaps if it's better than W's worst, or W isn't full yet.
                 if (neighbor_dist < worst_dist || static_cast<int>(W.size()) < ef) {
                     C.push({neighbor_dist, neighbor});
                     W.push({neighbor_dist, neighbor});
-                    if (static_cast<int>(W.size()) > ef) W.pop();  // W is full — evict the worst
+                    if (static_cast<int>(W.size()) > ef) W.pop();
                 }
+            };
+
+            if (layer == 0) {
+                int cnt = adj0_count_[candidate];
+                const NodeId* nbrs = adj0_ptr(candidate);
+                // Issue prefetches for all neighbor vectors before computing distances.
+                // While dist_q(nbrs[0]) runs, nbrs[1..cnt-1] vectors arrive from memory.
+#ifndef VORTEXDB_NO_PREFETCH
+                for (int k = 0; k < cnt; ++k)
+                    __builtin_prefetch(vec_ptr(nbrs[k]), 0, 0);
+#endif
+                for (int k = 0; k < cnt; ++k) expand(nbrs[k]);
+            } else {
+                const auto& candidate_nbrs = nodes_flat_[candidate].neighbors;
+                if (layer >= static_cast<int>(candidate_nbrs.size())) continue;
+                for (NodeId neighbor : candidate_nbrs[layer]) expand(neighbor);
             }
         }
 
@@ -228,26 +278,46 @@ struct HnswIndex::Impl {
     // This keeps each node's neighbor count within M_max while selecting diverse neighbors
     // rather than just the closest ones.
     void add_edge(NodeId u, NodeId v, int layer, int M_max) {
-        auto add_one = [&](NodeId from, NodeId to) {
-            auto& nbrs = nodes[from].neighbors[layer];
-            if (static_cast<int>(nbrs.size()) < M_max) {
-                nbrs.push_back(to);
-            } else {
-                // List is full — rebuild with heuristic pruning.
-                // Include the new candidate alongside existing neighbors so it gets
-                // a fair chance to displace a redundant neighbor.
-                std::vector<std::pair<float, NodeId>> candidates;
-                candidates.reserve(nbrs.size() + 1);
-                for (NodeId n : nbrs)
-                    candidates.push_back({dist(from, n), n});
-                candidates.push_back({dist(from, to), to});
-                std::sort(candidates.begin(), candidates.end());
-
-                nbrs = select_neighbors(candidates, M_max);
-            }
-        };
-        add_one(u, v);
-        add_one(v, u);
+        if (layer == 0) {
+            auto add_one_flat = [&](NodeId from, NodeId to) {
+                grow_adj0(from);
+                uint8_t& cnt = adj0_count_[from];
+                NodeId*  nbrs = adj0_ptr(from);
+                if (cnt < M_max) {
+                    nbrs[cnt++] = to;
+                } else {
+                    std::vector<std::pair<float, NodeId>> candidates;
+                    candidates.reserve(cnt + 1);
+                    for (int k = 0; k < cnt; ++k)
+                        candidates.push_back({dist(from, nbrs[k]), nbrs[k]});
+                    candidates.push_back({dist(from, to), to});
+                    std::sort(candidates.begin(), candidates.end());
+                    auto selected = select_neighbors(candidates, M_max);
+                    cnt = static_cast<uint8_t>(selected.size());
+                    for (int k = 0; k < (int)selected.size(); ++k) nbrs[k] = selected[k];
+                    for (int k = cnt; k < M_max; ++k) nbrs[k] = kInvalidNode;
+                }
+            };
+            add_one_flat(u, v);
+            add_one_flat(v, u);
+        } else {
+            auto add_one = [&](NodeId from, NodeId to) {
+                auto& nbrs = nodes_flat_[from].neighbors[layer];
+                if (static_cast<int>(nbrs.size()) < M_max) {
+                    nbrs.push_back(to);
+                } else {
+                    std::vector<std::pair<float, NodeId>> candidates;
+                    candidates.reserve(nbrs.size() + 1);
+                    for (NodeId n : nbrs)
+                        candidates.push_back({dist(from, n), n});
+                    candidates.push_back({dist(from, to), to});
+                    std::sort(candidates.begin(), candidates.end());
+                    nbrs = select_neighbors(candidates, M_max);
+                }
+            };
+            add_one(u, v);
+            add_one(v, u);
+        }
     }
 };
 
@@ -260,32 +330,29 @@ struct HnswIndex::Impl {
 HnswIndex::HnswIndex(HnswConfig cfg) : impl_(std::make_unique<Impl>(cfg)) {}
 HnswIndex::~HnswIndex() = default;
 
-// Inserts a vector into the index.
-//   id:  caller-assigned identifier for this vector; must be unique across all inserts.
-//   vec: the vector to insert — a float array of length cfg.dim (e.g. a text embedding).
-// Assigns a random layer, runs greedy descent to find a good entry point, then
-// beam-searches at each layer to find and connect neighbors. O(log n) on average.
-void HnswIndex::insert(NodeId id, const float* vec) {
-    auto& I = *impl_;
+// Internal helper: inserts a vector with a specific NodeId.
+// Used by both insert() (auto-id) and insert_for_recovery() (explicit id).
+static void insert_with_id(HnswIndex::Impl& I, NodeId id, const float* vec) {
 
-    // Store the vector.
-    I.vecs[id] = std::vector<float>(vec, vec + I.cfg.dim);
+    // Store the vector in the flat array (grows if id > current max).
+    I.store_vec(id, vec);
 
     // Determine whether this is a new node or a re-insert of an existing one.
     // live_count must only be incremented if the node is new or was tombstoned —
     // re-inserting a live node (e.g. same WAL record replayed twice) must not
     // double-count it.
-    auto existing = I.nodes.find(id);
-    bool is_new          = (existing == I.nodes.end());
-    bool was_tombstoned  = !is_new && existing->second.tombstone;
+    bool is_new         = !I.node_exists(id);
+    bool was_tombstoned = !is_new && I.nodes_flat_[id].tombstone;
 
     // Create the node and assign a random layer.
     int assigned_layer = I.assign_layer();
-    HnswNode node;
-    node.id       = id;
-    node.layer    = assigned_layer;
-    node.neighbors.resize(assigned_layer + 1);  // one neighbor list per layer 0..assigned_layer
-    I.nodes[id]   = std::move(node);
+    I.grow_nodes(id);
+    I.grow_adj0(id);
+    HnswNode& node  = I.nodes_flat_[id];
+    node.id         = id;
+    node.layer      = assigned_layer;
+    node.tombstone  = false;
+    node.neighbors.assign(assigned_layer + 1, {});
     if (is_new || was_tombstoned)
         ++I.live_count;
 
@@ -320,7 +387,7 @@ void HnswIndex::insert(NodeId id, const float* vec) {
         auto neighbors = I.select_neighbors(candidates, max_neighbors);
 
         // ensure the node's neighbor list is sized for this level before connecting edges.
-        auto& node_nbrs = I.nodes[id].neighbors;
+        auto& node_nbrs = I.nodes_flat_[id].neighbors;
         if (static_cast<int>(node_nbrs.size()) <= level)
             node_nbrs.resize(level + 1);
 
@@ -342,6 +409,24 @@ void HnswIndex::insert(NodeId id, const float* vec) {
         I.entry_point = id;
         I.max_layer   = assigned_layer;
     }
+}
+
+// Auto-assigns sequential NodeId using next_id_ counter.
+// Returns the assigned NodeId.
+NodeId HnswIndex::insert(const float* vec) {
+    auto& I = *impl_;
+    NodeId id = I.next_id_++;
+    insert_with_id(I, id, vec);
+    return id;
+}
+
+// Used for WAL replay and re-inserts with an existing NodeId.
+// Updates next_id_ = max(next_id_, id+1) so future auto-assigns don't collide.
+void HnswIndex::insert_for_recovery(NodeId id, const float* vec) {
+    auto& I = *impl_;
+    if (id + 1 > I.next_id_)
+        I.next_id_ = id + 1;
+    insert_with_id(I, id, vec);
 }
 
 // Returns the k approximate nearest neighbors of query, sorted ascending by distance.
@@ -382,52 +467,47 @@ std::vector<std::pair<float, NodeId>> HnswIndex::search(
     result.reserve(k);
     for (auto& [dist, id] : candidates) {
         if (static_cast<int>(result.size()) >= k) break;
-        auto it = I.nodes.find(id);
-        if (it != I.nodes.end() && !it->second.tombstone) {
+        if (I.node_exists(id) && !I.nodes_flat_[id].tombstone)
             result.push_back({dist, id});
-        }
     }
     return result;
 }
 
-// Soft-deletes a node by setting its tombstone flag.
-//   id: the node to remove; no-op if id doesn't exist or is already tombstoned.
-// The node stays in the graph as a routing intermediary — edges are not removed.
-// Tombstoned nodes are skipped in search results but may still be traversed.
 void HnswIndex::remove(NodeId id) {
     auto& I = *impl_;
-    auto it = I.nodes.find(id);
-    if (it == I.nodes.end() || it->second.tombstone) return;
-    it->second.tombstone = true;
+    if (!I.node_exists(id) || I.nodes_flat_[id].tombstone) return;
+    I.nodes_flat_[id].tombstone = true;
     --I.live_count;
 }
 
-// Returns the number of live (non-tombstoned) nodes in the index.
 size_t HnswIndex::size() const {
     return impl_->live_count;
 }
 
 size_t HnswIndex::neighbor_count(NodeId id, int layer) const {
     auto& I = *impl_;
-    auto it = I.nodes.find(id);
-    if (it == I.nodes.end()) return 0;
-    const auto& nbrs = it->second.neighbors;
+    if (!I.node_exists(id)) return 0;
+    if (layer == 0) return I.adj0_count_[id];
+    const auto& nbrs = I.nodes_flat_[id].neighbors;
     if (layer >= static_cast<int>(nbrs.size())) return 0;
     return nbrs[layer].size();
 }
 
 int HnswIndex::node_layer(NodeId id) const {
     auto& I = *impl_;
-    auto it = I.nodes.find(id);
-    if (it == I.nodes.end()) return -1;
-    return it->second.layer;
+    if (!I.node_exists(id)) return -1;
+    return I.nodes_flat_[id].layer;
 }
 
 std::vector<NodeId> HnswIndex::neighbors_of(NodeId id, int layer) const {
     auto& I = *impl_;
-    auto it = I.nodes.find(id);
-    if (it == I.nodes.end()) return {};
-    const auto& nbrs = it->second.neighbors;
+    if (!I.node_exists(id)) return {};
+    if (layer == 0) {
+        int cnt = I.adj0_count_[id];
+        const NodeId* p = I.adj0_ptr(id);
+        return std::vector<NodeId>(p, p + cnt);
+    }
+    const auto& nbrs = I.nodes_flat_[id].neighbors;
     if (layer >= static_cast<int>(nbrs.size())) return {};
     return nbrs[layer];
 }
@@ -439,14 +519,22 @@ std::vector<NodeId> HnswIndex::neighbors_of(NodeId id, int layer) const {
 std::vector<HnswIndex::NodeData> HnswIndex::snapshot() const {
     auto& I = *impl_;
     std::vector<NodeData> out;
-    out.reserve(I.nodes.size());
-    for (auto& [id, node] : I.nodes) {
+    out.reserve(I.nodes_flat_.size());
+    for (auto& node : I.nodes_flat_) {
+        if (node.id == kInvalidNode) continue;
         NodeData nd;
         nd.id        = node.id;
         nd.layer     = node.layer;
         nd.tombstone = node.tombstone;
-        nd.vec       = I.vecs.at(id);
-        nd.neighbors = node.neighbors;
+        nd.vec = std::vector<float>(I.vec_ptr(node.id), I.vec_ptr(node.id) + I.cfg.dim);
+        // Layer-0 neighbors live in adj0_, not in node.neighbors.
+        int cnt = I.adj0_count_[node.id];
+        const NodeId* p = I.adj0_ptr(node.id);
+        nd.neighbors.resize(std::max(1, node.layer + 1));
+        nd.neighbors[0].assign(p, p + cnt);
+        for (int l = 1; l <= node.layer; ++l)
+            nd.neighbors[l] = (l < static_cast<int>(node.neighbors.size()))
+                               ? node.neighbors[l] : std::vector<NodeId>{};
         out.push_back(std::move(nd));
     }
     return out;
@@ -458,19 +546,31 @@ int    HnswIndex::max_layer_val()   const { return impl_->max_layer; }
 void HnswIndex::restore(NodeId entry_point, int max_layer, size_t live_count,
                         std::vector<NodeData> nodes) {
     auto& I = *impl_;
-    if (!I.nodes.empty())
+    if (!I.nodes_flat_.empty())
         throw std::logic_error("HnswIndex::restore called on a non-empty index");
     I.entry_point = entry_point;
     I.max_layer   = max_layer;
     I.live_count  = live_count;
     for (auto& nd : nodes) {
-        I.vecs[nd.id] = std::move(nd.vec);
-        HnswNode node;
-        node.id        = nd.id;
-        node.layer     = nd.layer;
-        node.tombstone = nd.tombstone;
-        node.neighbors = std::move(nd.neighbors);
-        I.nodes[nd.id] = std::move(node);
+        I.store_vec(nd.id, nd.vec.data());
+        I.grow_nodes(nd.id);
+        I.grow_adj0(nd.id);
+        HnswNode& node  = I.nodes_flat_[nd.id];
+        node.id         = nd.id;
+        node.layer      = nd.layer;
+        node.tombstone  = nd.tombstone;
+        // Layer-0 neighbors go into adj0_; upper layers stay in node.neighbors.
+        if (!nd.neighbors.empty()) {
+            const auto& l0 = nd.neighbors[0];
+            uint8_t cnt = static_cast<uint8_t>(std::min((int)l0.size(), I.cfg.M0));
+            I.adj0_count_[nd.id] = cnt;
+            NodeId* p = I.adj0_ptr(nd.id);
+            for (int k = 0; k < cnt; ++k) p[k] = l0[k];
+        }
+        node.neighbors = std::move(nd.neighbors);  // keep upper layers; [0] ignored
+        // Update next_id_ so auto-assigns after restore() don't collide.
+        if (nd.id + 1 > I.next_id_)
+            I.next_id_ = nd.id + 1;
     }
 }
 

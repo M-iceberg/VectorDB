@@ -33,9 +33,11 @@ void DistanceCompute::compute_batch(const float* query, const float* candidates,
                                     size_t n, size_t dim, float* out) const {
     constexpr int kPrefetchDistance = 2;
     for (size_t i = 0; i < n; ++i) {
+#ifndef VORTEXDB_NO_PREFETCH
         if (i + kPrefetchDistance < n) {
             __builtin_prefetch(candidates + (i + kPrefetchDistance) * dim, 0, 1);
         }
+#endif
         out[i] = compute(query, candidates + i * dim, dim);
     }
 }

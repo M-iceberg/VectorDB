@@ -65,7 +65,13 @@ public:
                                          // into a HnswIndex; must call it directly.
     ~HnswIndex();
 
-    void insert(NodeId id, const float* vec);
+    // Auto-assigns sequential NodeId internally using next_id_ counter.
+    // Returns the assigned NodeId.
+    NodeId insert(const float* vec);
+
+    // Used only by WAL replay and re-inserts of existing user_ids.
+    // Updates next_id_ = max(next_id_, id+1).
+    void insert_for_recovery(NodeId id, const float* vec);
 
     // Returns up to k (distance, id) pairs sorted by ascending distance.
     std::vector<std::pair<float, NodeId>> search(

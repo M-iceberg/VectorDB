@@ -1,5 +1,69 @@
 # Benchmarks
 
+## SIMD Profiling — Search Hotspot Analysis (Day 27)
+
+**Setup:** dim=128, N=100K, ef=200, HNSW M=16, L2 metric  
+**Hardware:** Apple Silicon (ARM NEON)  
+**Tool:** macOS `sample` (8-second sampling window, captured during 100K-query search run)  
+**Binary:** `bench/bench_profile.cpp` (Release build, no Python overhead)
+
+### What does distance compute cost?
+
+| Component | Samples | % of search |
+|-----------|--------:|------------:|
+| `unordered_set` visited alloc (hash table insert) | 4,274 | 50.7% |
+| Graph arithmetic / pointer chasing | 1,492 | 17.7% |
+| **NeonL2::compute** (NEON SIMD distance) | **1,044** | **12.4%** |
+| `free` — visited set teardown | 828 | 9.8% |
+| `priority_queue::push` | 339 | 4.0% |
+| Other | 445 | 5.4% |
+
+**Visited-set total (alloc + free): 5,102 samples = 60.6% of search time.**
+
+Root cause: `HnswIndex::search_layer()` creates a `std::unordered_set<uint32_t>` per call to track visited nodes. At ef=200, each query calls `search_layer()` and inserts up to ~3,300 node IDs. The hash table triggers `operator new` on rehash and requires full teardown on return — all of which shows up as malloc/free in the profile, not in distance math.
+
+### Prefetch on vs off
+
+| Mode | QPS | Per-query latency |
+|------|----:|------------------:|
+| Prefetch ON (`__builtin_prefetch`) | 1,669 | 0.599 ms |
+| Prefetch OFF | 1,725 | 0.580 ms |
+| Delta | +3.4% without prefetch | |
+
+`__builtin_prefetch` in `compute_batch()` adds instruction overhead with no cache benefit. The prefetch is designed for sequential array scans, but HNSW `search_layer()` accesses graph neighbors scattered throughout memory — by the time `compute_batch` sees each neighbor, it's already been fetched by the graph traversal (or missed L3 either way). Distance compute is 12% of runtime, so even a 2× speedup there would only improve total QPS by 6%.
+
+### Distance compute microbenchmark
+
+Isolated cost of NEON `compute_batch()` on a warm contiguous 100K-vector array:
+
+| Metric | Value |
+|--------|-------|
+| Throughput | 9.4 ns/vec |
+| Rate | ~106 M vectors/sec |
+| Estimated per-query distance cost (ef=200, ~3,322 nodes) | 0.031 ms |
+| Actual per-query search latency | 0.580 ms |
+| Distance fraction | ~5% (microbench) / ~12% (sample, includes cache misses) |
+
+The gap between 5% and 12% reflects cache effects: the contiguous microbenchmark benefits from hardware prefetch, while HNSW search accesses scattered node vectors that miss L3 cache.
+
+### Optimization opportunity
+
+Replacing the per-search `std::unordered_set` with a flat bitset (or a generation-counter array) would eliminate the 61% allocation overhead. At 100K nodes, a bitset needs 12.5 KB — fits in L2 cache. This is the highest-leverage optimization available and would be the first change in a production hardening pass.
+
+### Linux (AVX2) — perf stat (CI)
+
+GitHub Actions `ubuntu-latest` (x86, AVX2), measured via `perf stat`:
+
+| Event | Value |
+|-------|-------|
+| IPC (instructions / cycle) | ~1.6–1.8 |
+| Cache-miss rate | ~8–12% (L3) |
+| Distance compute fraction | ~10–15% |
+
+See `.github/workflows/ci.yml` → `simd-profiling` job for raw output.
+
+---
+
 ## GloVe-1.2M Benchmark
 
 **Setup:** GloVe-1.2M dataset (1,183,514 base vectors, 10K queries, dim=200, cosine/angular), M=16, ef_construction=200, local ARM (Apple Silicon M-series). Python SDK, single-threaded insert.

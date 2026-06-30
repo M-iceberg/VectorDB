@@ -119,6 +119,91 @@ jobs:
           path: massif.out
 
   # -------------------------------------------------------------------------
+  # SIMD profiling: perf stat + flamegraph on x86 (AVX2).
+  # Builds bench_profile with VECTORDB_PROFILE=ON, runs 5K queries (ef=200),
+  # compares prefetch ON vs OFF via perf stat (IPC, cache-miss rate),
+  # then generates a flamegraph SVG of the search hot path.
+  # -------------------------------------------------------------------------
+  simd-profiling:
+    name: SIMD profiling (perf stat + flamegraph, x86 AVX2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build linux-perf git perl
+          sudo sysctl -w kernel.perf_event_paranoid=1
+          sudo sysctl -w kernel.kptr_restrict=0
+
+      - name: Clone FlameGraph tools
+        run: git clone --depth=1 https://github.com/brendangregg/FlameGraph /tmp/flamegraph
+
+      - name: Build bench_profile (prefetch ON)
+        run: |
+          cmake -B build_prefetch -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DVECTORDB_PROFILE=ON
+          cmake --build build_prefetch --target bench_profile
+
+      - name: Build bench_profile (prefetch OFF)
+        run: |
+          cmake -B build_noprefetch -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DVECTORDB_PROFILE=ON -DVORTEXDB_NO_PREFETCH=ON
+          cmake --build build_noprefetch --target bench_profile
+
+      - name: perf stat — prefetch ON
+        run: |
+          perf stat -e cycles,instructions,cache-misses,cache-references \
+            ./build_prefetch/bench/bench_profile \
+              --dim 128 --n 50000 --queries 5000 --ef 200 \
+            2>&1 | tee perf_on.txt
+
+      - name: perf stat — prefetch OFF
+        run: |
+          perf stat -e cycles,instructions,cache-misses,cache-references \
+            ./build_noprefetch/bench/bench_profile \
+              --dim 128 --n 50000 --queries 5000 --ef 200 \
+            2>&1 | tee perf_off.txt
+
+      - name: Summary table
+        run: |
+          echo "| Metric | Prefetch ON | Prefetch OFF |"
+          echo "|--------|------------|--------------|"
+          QPS_ON=$(grep "QPS:" perf_on.txt | awk '{print $2}')
+          QPS_OFF=$(grep "QPS:" perf_off.txt | awk '{print $2}')
+          MISS_ON=$(grep "cache-misses" perf_on.txt | awk '{print $1}')
+          MISS_OFF=$(grep "cache-misses" perf_off.txt | awk '{print $1}')
+          IPC_ON=$(grep "insn per cycle" perf_on.txt | awk '{print $1}')
+          IPC_OFF=$(grep "insn per cycle" perf_off.txt | awk '{print $1}')
+          echo "| QPS | $QPS_ON | $QPS_OFF |"
+          echo "| cache-misses | $MISS_ON | $MISS_OFF |"
+          echo "| IPC (insn/cycle) | $IPC_ON | $IPC_OFF |"
+
+      - name: Flamegraph — search hot path (prefetch ON)
+        run: |
+          perf record -g --call-graph dwarf -F 99 \
+            ./build_prefetch/bench/bench_profile \
+              --dim 128 --n 50000 --queries 30000 --ef 200 \
+            2>&1 || true
+          perf script | \
+            /tmp/flamegraph/stackcollapse-perf.pl | \
+            /tmp/flamegraph/flamegraph.pl \
+              --title "VortexDB search hot path (prefetch ON, AVX2, N=50K)" \
+              --width 1200 \
+            > flamegraph_prefetch_on.svg
+          echo "Flamegraph generated: $(wc -c < flamegraph_prefetch_on.svg) bytes"
+
+      - name: Upload profiling artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: simd-profiling-results
+          path: |
+            perf_on.txt
+            perf_off.txt
+            flamegraph_prefetch_on.svg
+
+  # -------------------------------------------------------------------------
   # x86 (ubuntu-latest): tests AVX2 path and verifies x86 compilation
   # -------------------------------------------------------------------------
   test-x86:

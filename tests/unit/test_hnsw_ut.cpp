@@ -85,16 +85,16 @@ TEST(HnswBasic, SizeZeroInitially) {
 TEST(HnswBasic, InsertIncreasesSize) {
     HnswIndex idx(test_cfg());
     auto v = make_vec(4, 1.0f);
-    idx.insert(0, v.data());
+    idx.insert_for_recovery(0, v.data());
     EXPECT_EQ(idx.size(), 1u);
-    idx.insert(1, v.data());
+    idx.insert_for_recovery(1, v.data());
     EXPECT_EQ(idx.size(), 2u);
 }
 
 TEST(HnswBasic, SearchSingleNodeReturnsIt) {
     HnswIndex idx(test_cfg());
     auto v = make_vec(4, 1.0f);
-    idx.insert(42, v.data());
+    idx.insert_for_recovery(42, v.data());
 
     auto q = make_vec(4, 0.9f);
     auto result = idx.search(q.data(), 1, 10);
@@ -106,7 +106,7 @@ TEST(HnswBasic, SearchReturnsAtMostK) {
     HnswIndex idx(test_cfg());
     for (NodeId i = 0; i < 20; ++i) {
         auto v = random_vec(4, i);
-        idx.insert(i, v.data());
+        idx.insert_for_recovery(i, v.data());
     }
     auto q = random_vec(4, 999);
     auto result = idx.search(q.data(), 3, 20);
@@ -117,7 +117,7 @@ TEST(HnswBasic, SearchResultsSortedAscending) {
     HnswIndex idx(test_cfg());
     for (NodeId i = 0; i < 10; ++i) {
         auto v = random_vec(4, i);
-        idx.insert(i, v.data());
+        idx.insert_for_recovery(i, v.data());
     }
     auto q = random_vec(4, 999);
     auto result = idx.search(q.data(), 5, 20);
@@ -141,11 +141,11 @@ TEST(HnswCorrectness, FindsExactNearestNeighbor) {
 
     for (NodeId i = 0; i < 50; ++i) {
         auto v = random_vec(dim, 1000 + i);
-        idx.insert(i, v.data());
+        idx.insert_for_recovery(i, v.data());
     }
 
     // Insert the query itself — distance from query = 0.
-    idx.insert(99, query.data());
+    idx.insert_for_recovery(99, query.data());
 
     auto result = idx.search(query.data(), 1, 50);
     ASSERT_FALSE(result.empty());
@@ -157,7 +157,7 @@ TEST(HnswCorrectness, DistancesAreNonNegative) {
     HnswIndex idx(test_cfg());
     for (NodeId i = 0; i < 10; ++i) {
         auto v = random_vec(4, i * 7);
-        idx.insert(i, v.data());
+        idx.insert_for_recovery(i, v.data());
     }
     auto q = random_vec(4, 555);
     auto result = idx.search(q.data(), 5, 20);
@@ -173,8 +173,8 @@ TEST(HnswCorrectness, DistancesAreNonNegative) {
 TEST(HnswTombstone, RemoveDecreasesSize) {
     HnswIndex idx(test_cfg());
     auto v = make_vec(4, 1.0f);
-    idx.insert(0, v.data());
-    idx.insert(1, v.data());
+    idx.insert_for_recovery(0, v.data());
+    idx.insert_for_recovery(1, v.data());
     EXPECT_EQ(idx.size(), 2u);
     idx.remove(0);
     EXPECT_EQ(idx.size(), 1u);
@@ -189,8 +189,8 @@ TEST(HnswTombstone, RemovedNodeNotReturnedInSearch) {
     std::vector<float> close = {1.1f, 0.0f, 0.0f, 0.0f};
     std::vector<float> far   = {9.0f, 0.0f, 0.0f, 0.0f};
 
-    idx.insert(1, close.data());
-    idx.insert(2, far.data());
+    idx.insert_for_recovery(1, close.data());
+    idx.insert_for_recovery(2, far.data());
 
     // Confirm close is returned first.
     auto before = idx.search(query.data(), 1, 10);
@@ -209,7 +209,7 @@ TEST(HnswTombstone, RemovedNodeNotReturnedInSearch) {
 TEST(HnswTombstone, RemoveIdempotent) {
     HnswIndex idx(test_cfg());
     auto v = make_vec(4, 0.5f);
-    idx.insert(5, v.data());
+    idx.insert_for_recovery(5, v.data());
     idx.remove(5);
     idx.remove(5);  // second remove should be a no-op
     EXPECT_EQ(idx.size(), 0u);
@@ -242,7 +242,7 @@ TEST(HnswRecall, RecallAtLeast90Percent) {
     std::vector<std::vector<float>> corpus(N);
     for (size_t i = 0; i < N; ++i) {
         corpus[i] = random_vec(dim, i);
-        idx.insert(static_cast<NodeId>(i), corpus[i].data());
+        idx.insert_for_recovery(static_cast<NodeId>(i), corpus[i].data());
     }
 
     int total_hits = 0;
@@ -273,8 +273,8 @@ TEST(HnswMetric, CosineFindsNearestNeighbor) {
     HnswIndex idx(test_cfg(dim, Metric::Cosine));
     auto query = random_vec(dim, 42);
     for (NodeId i = 0; i < 50; ++i)
-        idx.insert(i, random_vec(dim, 200 + i).data());
-    idx.insert(99, query.data());
+        idx.insert_for_recovery(i, random_vec(dim, 200 + i).data());
+    idx.insert_for_recovery(99, query.data());
     auto result = idx.search(query.data(), 1, 50);
     ASSERT_FALSE(result.empty());
     EXPECT_EQ(result[0].second, 99u);
@@ -285,8 +285,8 @@ TEST(HnswMetric, InnerProductFindsNearestNeighbor) {
     HnswIndex idx(test_cfg(dim, Metric::InnerProduct));
     auto query = random_vec(dim, 43);
     for (NodeId i = 0; i < 50; ++i)
-        idx.insert(i, random_vec(dim, 300 + i).data());
-    idx.insert(99, query.data());
+        idx.insert_for_recovery(i, random_vec(dim, 300 + i).data());
+    idx.insert_for_recovery(99, query.data());
     auto result = idx.search(query.data(), 1, 50);
     ASSERT_FALSE(result.empty());
     EXPECT_EQ(result[0].second, 99u);
@@ -309,7 +309,7 @@ TEST(HnswEfSearch, HigherEfSearchNeverWorseRecall) {
     std::vector<std::vector<float>> corpus(N);
     for (size_t i = 0; i < N; ++i) {
         corpus[i] = random_vec(dim, i + 500);
-        idx.insert(static_cast<NodeId>(i), corpus[i].data());
+        idx.insert_for_recovery(static_cast<NodeId>(i), corpus[i].data());
     }
 
     auto query = random_vec(dim, 9999);
@@ -332,14 +332,14 @@ TEST(HnswEfSearch, HigherEfSearchNeverWorseRecall) {
 TEST(HnswSize, SizeAccurateAfterManyInserts) {
     HnswIndex idx(test_cfg(4));
     for (NodeId i = 0; i < 100; ++i)
-        idx.insert(i, random_vec(4, i).data());
+        idx.insert_for_recovery(i, random_vec(4, i).data());
     EXPECT_EQ(idx.size(), 100u);
 }
 
 TEST(HnswSize, SizeAccurateAfterMixedInsertRemove) {
     HnswIndex idx(test_cfg(4));
     for (NodeId i = 0; i < 50; ++i)
-        idx.insert(i, random_vec(4, i).data());
+        idx.insert_for_recovery(i, random_vec(4, i).data());
     for (NodeId i = 0; i < 20; ++i)
         idx.remove(i);
     EXPECT_EQ(idx.size(), 30u);
@@ -360,7 +360,7 @@ TEST(HnswGraph, AllNodesHaveNeighborsAtLayer0) {
     HnswIndex idx(cfg);
 
     for (NodeId i = 0; i < 100; ++i)
-        idx.insert(i, random_vec(dim, i + 42).data());
+        idx.insert_for_recovery(i, random_vec(dim, i + 42).data());
 
     for (NodeId i = 1; i < 100; ++i)
         EXPECT_GT(idx.neighbor_count(i, 0), 0u) << "node " << i << " has no neighbors at layer 0";
@@ -373,7 +373,7 @@ TEST(HnswGraph, NeighborCountsWithinBounds) {
     HnswIndex idx(cfg);
 
     for (NodeId i = 0; i < 100; ++i)
-        idx.insert(i, random_vec(dim, i + 200).data());
+        idx.insert_for_recovery(i, random_vec(dim, i + 200).data());
 
     for (NodeId i = 0; i < 100; ++i) {
         int top_layer = idx.node_layer(i);
@@ -391,7 +391,7 @@ TEST(HnswGraph, NodeLayerIsNonNegative) {
     const size_t dim = 8;
     HnswIndex idx(test_cfg(dim));
     for (NodeId i = 0; i < 100; ++i)
-        idx.insert(i, random_vec(dim, i + 300).data());
+        idx.insert_for_recovery(i, random_vec(dim, i + 300).data());
 
     for (NodeId i = 0; i < 100; ++i)
         EXPECT_GE(idx.node_layer(i), 0) << "node " << i << " has invalid layer";
@@ -406,7 +406,7 @@ TEST(HnswGraph, NonExistentNodeReturnsInvalid) {
 TEST(HnswGraph, FirstNodeHasNoNeighbors) {
     // The first inserted node has nobody to connect to — its neighbor list must be empty.
     HnswIndex idx(test_cfg(8));
-    idx.insert(0, random_vec(8, 1).data());
+    idx.insert_for_recovery(0, random_vec(8, 1).data());
     EXPECT_EQ(idx.neighbor_count(0, 0), 0u);
 }
 
@@ -422,7 +422,7 @@ TEST(HnswGraph, NodeHasNeighborListForEachLayer) {
     HnswIndex idx(test_cfg(dim));
 
     for (NodeId i = 0; i < 100; ++i)
-        idx.insert(i, random_vec(dim, i + 600).data());
+        idx.insert_for_recovery(i, random_vec(dim, i + 600).data());
 
     for (NodeId i = 0; i < 100; ++i) {
         int top = idx.node_layer(i);
@@ -453,7 +453,7 @@ TEST(HnswPruning, NeighborCountsWithinBoundsLargeGraph) {
     HnswIndex idx(cfg);
 
     for (NodeId i = 0; i < 10000; ++i)
-        idx.insert(i, random_vec(dim, i).data());
+        idx.insert_for_recovery(i, random_vec(dim, i).data());
 
     for (NodeId i = 0; i < 10000; ++i) {
         int top = idx.node_layer(i);
@@ -481,7 +481,7 @@ TEST(HnswPruning, RecallMaintainedAfterHeuristicPruning) {
     std::vector<std::vector<float>> vecs(N);
     for (NodeId i = 0; i < N; ++i) {
         vecs[i] = random_vec(dim, i + 7000);
-        idx.insert(i, vecs[i].data());
+        idx.insert_for_recovery(i, vecs[i].data());
     }
 
     const int k = 10;
@@ -539,7 +539,7 @@ TEST(HnswPruning, HeuristicVsGreedyRecall) {
         cfg.heuristic       = use_heuristic;
         HnswIndex idx(cfg);
         for (NodeId i = 0; i < N; ++i)
-            idx.insert(i, vecs[i].data());
+            idx.insert_for_recovery(i, vecs[i].data());
 
         int found = 0;
         for (int q = 0; q < 100; ++q) {
@@ -586,7 +586,7 @@ TEST(HnswCorrectness, SearchResultIdsAreValid) {
     HnswIndex idx(test_cfg(8));
     std::unordered_set<NodeId> inserted;
     for (NodeId i = 0; i < N; ++i) {
-        idx.insert(i, random_vec(8, i + 100).data());
+        idx.insert_for_recovery(i, random_vec(8, i + 100).data());
         inserted.insert(i);
     }
     auto query = random_vec(8, 9876);

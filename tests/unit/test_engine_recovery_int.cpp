@@ -55,7 +55,7 @@ TEST_F(EngineRecoveryTest, BasicInsertAndSearch) {
 
     for (uint32_t i = 0; i < 100; ++i) {
         auto v = random_vec(dim, rng);
-        engine.insert("test", i, v.data());
+        engine.insert("test", std::to_string(i), v.data());
     }
 
     auto q = random_vec(dim, rng);
@@ -84,7 +84,7 @@ TEST_F(EngineRecoveryTest, WalReplayOnReopen) {
         Engine engine(data_dir_);
         engine.create_collection(make_schema(dim));
         for (uint32_t i = 0; i < N; ++i)
-            engine.insert("test", i, vecs[i].data());
+            engine.insert("test", std::to_string(i), vecs[i].data());
         // Engine destroyed here — WAL on disk, no checkpoint.
     }
 
@@ -116,12 +116,12 @@ TEST_F(EngineRecoveryTest, CheckpointAndRecovery) {
         engine.create_collection(make_schema(dim));
 
         for (uint32_t i = 0; i < N; ++i)
-            engine.insert("test", i, vecs[i].data());
+            engine.insert("test", std::to_string(i), vecs[i].data());
 
         engine.checkpoint("test");   // snapshot N vectors, truncate WAL
 
         for (uint32_t i = N; i < N + M; ++i)
-            engine.insert("test", i, vecs[i].data());
+            engine.insert("test", std::to_string(i), vecs[i].data());
 
         // "Crash": engine destroyed without another checkpoint.
         // On disk: graph.bin (N vectors) + WAL (M records)
@@ -149,13 +149,13 @@ TEST_F(EngineRecoveryTest, RemovePersistedThroughReopen) {
         Engine engine(data_dir_);
         engine.create_collection(make_schema(dim));
         for (uint32_t i = 0; i < 50; ++i)
-            engine.insert("test", i, vecs[i].data());
+            engine.insert("test", std::to_string(i), vecs[i].data());
 
         engine.checkpoint("test");
 
         // Remove half the nodes after checkpoint (WAL records).
         for (uint32_t i = 0; i < 50; i += 2)
-            engine.remove("test", i);
+            engine.remove("test", std::to_string(i));
     }
 
     Engine engine(data_dir_);
@@ -163,7 +163,7 @@ TEST_F(EngineRecoveryTest, RemovePersistedThroughReopen) {
     // Search near node 0's vector — it was deleted, must not appear in results.
     auto results = engine.search({"test", vecs[0].data(), 10, 50});
     for (auto& r : results)
-        EXPECT_NE(r.id % 2, 0u) << "deleted node " << r.id << " appeared in results";
+        EXPECT_NE(std::stoi(r.user_id) % 2, 0) << "deleted node " << r.user_id << " appeared in results";
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +183,7 @@ TEST_F(EngineRecoveryTest, ReplayIdempotency) {
         Engine engine(data_dir_);
         engine.create_collection(make_schema(dim));
         for (uint32_t i = 0; i < N; ++i)
-            engine.insert("test", i, vecs[i].data());
+            engine.insert("test", std::to_string(i), vecs[i].data());
     }
 
     // First recovery.
@@ -212,13 +212,13 @@ TEST_F(EngineRecoveryTest, MultipleCheckpoints) {
         Engine engine(data_dir_);
         engine.create_collection(make_schema(dim));
 
-        for (uint32_t i = 0; i < 30; ++i) { auto v = vec(); engine.insert("test", i, v.data()); }
+        for (uint32_t i = 0; i < 30; ++i) { auto v = vec(); engine.insert("test", std::to_string(i), v.data()); }
         engine.checkpoint("test");  // checkpoint 1
 
-        for (uint32_t i = 30; i < 60; ++i) { auto v = vec(); engine.insert("test", i, v.data()); }
+        for (uint32_t i = 30; i < 60; ++i) { auto v = vec(); engine.insert("test", std::to_string(i), v.data()); }
         engine.checkpoint("test");  // checkpoint 2
 
-        for (uint32_t i = 60; i < 80; ++i) { auto v = vec(); engine.insert("test", i, v.data()); }
+        for (uint32_t i = 60; i < 80; ++i) { auto v = vec(); engine.insert("test", std::to_string(i), v.data()); }
         // Crash here: 80 vectors, checkpoint at 60, WAL has 20 records.
     }
 
@@ -244,10 +244,10 @@ TEST_F(EngineRecoveryTest, TombstoneReinsertRecovery) {
         engine.create_collection(make_schema(dim));
 
         // Insert node 0, checkpoint, remove it, then re-insert with new vec.
-        engine.insert("test", 0, v0.data());
+        engine.insert("test", "0", v0.data());
         engine.checkpoint("test");
-        engine.remove("test", 0);
-        engine.insert("test", 0, v0b.data());
+        engine.remove("test", "0");
+        engine.insert("test", "0", v0b.data());
         // Crash: graph.bin has node 0 live, WAL has Delete(0) + Insert(0).
     }
 
@@ -255,7 +255,7 @@ TEST_F(EngineRecoveryTest, TombstoneReinsertRecovery) {
     // After recovery node 0 must be live with the new vector.
     auto results = engine.search({"test", v0b.data(), 1, 10});
     ASSERT_EQ(results.size(), 1u);
-    EXPECT_EQ(results[0].id, 0u);
+    EXPECT_EQ(results[0].user_id, "0");
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +281,7 @@ TEST_F(EngineRecoveryTest, DropAndRecreate) {
 
     for (uint32_t i = 0; i < 20; ++i) {
         auto v = random_vec(dim, rng);
-        engine.insert("test", i, v.data());
+        engine.insert("test", std::to_string(i), v.data());
     }
 
     engine.drop_collection("test");
@@ -335,10 +335,10 @@ TEST_F(EngineRecoveryTest, CrashRecoveryViaKill) {
         Engine engine(data_dir_);
         engine.create_collection(make_schema(dim));
         for (uint32_t i = 0; i < N; ++i)
-            engine.insert("test", i, vecs[i].data());
+            engine.insert("test", std::to_string(i), vecs[i].data());
         engine.checkpoint("test");
         for (uint32_t i = N; i < N + M; ++i)
-            engine.insert("test", i, vecs[i].data());
+            engine.insert("test", std::to_string(i), vecs[i].data());
 
         // Every insert called wal.sync() → fsync(), so all data is on disk.
         // Signal parent and wait to be killed.
@@ -382,7 +382,7 @@ TEST_F(EngineRecoveryTest, SearchTopKExceedsNodeCount) {
 
     for (size_t i = 0; i < N; ++i) {
         auto v = random_vec(dim, rng);
-        engine.insert("test", static_cast<uint32_t>(i), v.data());
+        engine.insert("test", std::to_string(i), v.data());
     }
 
     std::vector<float> q = random_vec(dim, rng);
@@ -400,8 +400,8 @@ TEST_F(EngineRecoveryTest, UnknownCollectionThrows) {
 
     std::vector<float> v(16, 0.0f);
 
-    EXPECT_THROW(engine.insert("no_such", 1, v.data()), std::runtime_error);
-    EXPECT_THROW(engine.remove("no_such", 1),            std::runtime_error);
+    EXPECT_THROW(engine.insert("no_such", "1", v.data()), std::runtime_error);
+    EXPECT_THROW(engine.remove("no_such", "1"),            std::runtime_error);
     EXPECT_THROW(engine.search({"no_such", v.data(), 1, 10}), std::runtime_error);
     EXPECT_THROW(engine.checkpoint("no_such"),           std::runtime_error);
     EXPECT_THROW(engine.drop_collection("no_such"),      std::runtime_error);

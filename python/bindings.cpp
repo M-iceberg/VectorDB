@@ -120,25 +120,30 @@ PYBIND11_MODULE(_vectordb, m) {
                 return out;
             })
 
-        // insert with optional metadata dict
+        // insert with optional metadata dict; returns the effective user_id string
         .def("insert",
-            [](Engine& self, const std::string& collection, uint32_t id,
+            [](Engine& self, const std::string& collection,
+               const std::string& user_id,
                py::array_t<float, py::array::c_style | py::array::forcecast> vec,
-               py::object metadata) {
+               py::object metadata) -> std::string {
                 auto buf = vec.request();
                 if (buf.ndim != 1)
                     throw std::invalid_argument("vector must be 1-D");
                 MetadataEntry meta;
                 if (!metadata.is_none())
                     meta = parse_metadata(metadata.cast<py::dict>());
-                self.insert(collection, id,
-                            static_cast<const float*>(buf.ptr), meta);
+                return self.insert(collection, user_id,
+                                   static_cast<const float*>(buf.ptr), meta);
             },
-            py::arg("collection"), py::arg("id"), py::arg("vector"),
+            py::arg("collection"), py::arg("user_id"), py::arg("vector"),
             py::arg("metadata") = py::none())
 
-        .def("remove", &Engine::remove,
-             py::arg("collection"), py::arg("id"))
+        .def("remove",
+            [](Engine& self, const std::string& collection,
+               const std::string& user_id) {
+                self.remove(collection, user_id);
+            },
+            py::arg("collection"), py::arg("user_id"))
 
         // search with optional filters dict
         .def("search",
@@ -159,7 +164,7 @@ PYBIND11_MODULE(_vectordb, m) {
                 py::list out;
                 for (auto& r : results) {
                     py::dict d;
-                    d["id"]       = r.id;
+                    d["user_id"]  = r.user_id;
                     d["distance"] = r.distance;
                     out.append(d);
                 }

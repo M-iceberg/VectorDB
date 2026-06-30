@@ -84,7 +84,7 @@ TEST(SiftRecall, Recall10KSubset) {
 
     HnswIndex idx(cfg);
     for (size_t i = 0; i < base.size(); ++i)
-        idx.insert(static_cast<NodeId>(i), base[i].data());
+        idx.insert_for_recovery(static_cast<NodeId>(i), base[i].data());
 
     // Measure recall@10 over all queries.
     const int k = 10;
@@ -162,7 +162,7 @@ TEST(SiftRecall, ParameterSweep) {
 
         HnswIndex idx(cfg);
         for (size_t i = 0; i < base.size(); ++i)
-            idx.insert(static_cast<NodeId>(i), base[i].data());
+            idx.insert_for_recovery(static_cast<NodeId>(i), base[i].data());
 
         for (int ef_search : {16, 32, 64, 128}) {
             auto [recall, qps] = measure(idx, ef_search);

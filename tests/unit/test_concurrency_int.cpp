@@ -57,7 +57,7 @@ TEST_F(ConcurrencyTest, ConcurrentReadersAndWriter) {
     std::mt19937 seed_rng(0);
     for (uint32_t i = 0; i < 100; ++i) {
         auto v = random_vec(dim, seed_rng);
-        engine.insert("test", i, v.data());
+        engine.insert("test", std::to_string(i), v.data());
     }
 
     std::atomic<bool>     stop{false};
@@ -72,7 +72,7 @@ TEST_F(ConcurrencyTest, ConcurrentReadersAndWriter) {
             uint32_t id = next_id.fetch_add(1, std::memory_order_relaxed);
             auto v = random_vec(dim, rng);
             try {
-                engine.insert("test", id, v.data());
+                engine.insert("test", std::to_string(id), v.data());
             } catch (...) {
                 writer_errors.fetch_add(1, std::memory_order_relaxed);
             }
@@ -132,7 +132,7 @@ TEST_F(ConcurrencyTest, ConcurrentWriters) {
             uint32_t base = static_cast<uint32_t>(t * per_thread);
             for (int i = 0; i < per_thread; ++i) {
                 auto v = random_vec(dim, rng);
-                engine.insert("test", base + static_cast<uint32_t>(i), v.data());
+                engine.insert("test", std::to_string(base + static_cast<uint32_t>(i)), v.data());
             }
         });
     }
@@ -159,7 +159,7 @@ TEST_F(ConcurrencyTest, ConcurrentReadersNoContention) {
     std::mt19937 seed_rng(0);
     for (uint32_t i = 0; i < 50; ++i) {
         auto v = random_vec(dim, seed_rng);
-        engine.insert("test", i, v.data());
+        engine.insert("test", std::to_string(i), v.data());
     }
 
     std::atomic<int> errors{0};

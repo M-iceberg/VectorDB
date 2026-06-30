@@ -305,22 +305,29 @@ void Wal::truncate_before(Lsn lsn) {
 
 // Replays WAL records with LSN >= start_lsn, dispatching each to the
 // appropriate callback. vec_dim is required to locate the optional metadata
-// section that follows [node_id: 4B][vec: dim*4B] in Insert payloads.
-// Delete payload layout: [node_id: 4B]. Checkpoint records are skipped.
+// section that follows [node_id: 4B][uid_len: 2B][uid: N][vec: dim*4B] in
+// Insert payloads. Delete payload layout: [node_id: 4B]. Checkpoint records
+// are skipped.
 void Wal::replay(Lsn start_lsn,
                  size_t vec_dim,
-                 std::function<void(uint32_t, const float*, size_t,
-                                    const MetadataEntry&)> on_insert,
+                 std::function<void(uint32_t, const std::string&, const float*,
+                                    size_t, const MetadataEntry&)> on_insert,
                  std::function<void(uint32_t)> on_delete) const {
     iterate(start_lsn, [&](Lsn, WalRecordType type,
                             const void* payload, uint32_t len) {
         if (type == WalRecordType::Insert) {
+            const uint8_t* p = static_cast<const uint8_t*>(payload);
             uint32_t id;
-            std::memcpy(&id, payload, sizeof(id));
-            const float* vec = reinterpret_cast<const float*>(
-                static_cast<const uint8_t*>(payload) + sizeof(uint32_t));
+            std::memcpy(&id, p, sizeof(uint32_t));
+            p += sizeof(uint32_t);
+            uint16_t uid_len;
+            std::memcpy(&uid_len, p, sizeof(uint16_t));
+            p += sizeof(uint16_t);
+            std::string user_id(reinterpret_cast<const char*>(p), uid_len);
+            p += uid_len;
+            const float* vec = reinterpret_cast<const float*>(p);
             MetadataEntry meta = parse_insert_metadata(payload, len, vec_dim);
-            on_insert(id, vec, vec_dim, meta);
+            on_insert(id, user_id, vec, vec_dim, meta);
         } else if (type == WalRecordType::Delete) {
             uint32_t id;
             std::memcpy(&id, payload, sizeof(id));

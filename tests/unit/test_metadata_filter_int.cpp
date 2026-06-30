@@ -83,7 +83,7 @@ TEST_F(MetadataFilterTest, EqFilterCorrectness) {
         vecs[i] = random_vec(dim, rng);
         MetadataEntry meta;
         meta.strings["color"] = (i % 3 == 0) ? "red" : (i % 3 == 1) ? "blue" : "green";
-        engine.insert("test", static_cast<uint32_t>(i), vecs[i].data(), meta);
+        engine.insert("test", std::to_string(i), vecs[i].data(), meta);
     }
 
     auto query = random_vec(dim, rng);
@@ -104,9 +104,9 @@ TEST_F(MetadataFilterTest, EqFilterCorrectness) {
     ASSERT_EQ((int)results.size(), k);
     // All returned IDs must pass the filter.
     for (auto& r : results)
-        EXPECT_EQ(r.id % 3, 0u) << "id " << r.id << " does not have color=red";
+        EXPECT_EQ(std::stoi(r.user_id) % 3, 0) << "id " << r.user_id << " does not have color=red";
     // Top result must match ground truth.
-    EXPECT_EQ(results[0].id, gt[0]);
+    EXPECT_EQ(std::stoul(results[0].user_id), static_cast<unsigned long>(gt[0]));
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ TEST_F(MetadataFilterTest, RangeFilterCorrectness) {
         vecs[i] = random_vec(dim, rng);
         MetadataEntry meta;
         meta.numerics["score"] = static_cast<double>(i);
-        engine.insert("test", static_cast<uint32_t>(i), vecs[i].data(), meta);
+        engine.insert("test", std::to_string(i), vecs[i].data(), meta);
     }
 
     auto query = random_vec(dim, rng);
@@ -145,10 +145,12 @@ TEST_F(MetadataFilterTest, RangeFilterCorrectness) {
         [](uint32_t i) { return i >= 100 && i <= 200; }, k);
 
     ASSERT_EQ((int)results.size(), k);
-    for (auto& r : results)
-        EXPECT_TRUE(r.id >= 100 && r.id <= 200)
-            << "id " << r.id << " outside range [100,200]";
-    EXPECT_EQ(results[0].id, gt[0]);
+    for (auto& r : results) {
+        uint32_t id = static_cast<uint32_t>(std::stoul(r.user_id));
+        EXPECT_TRUE(id >= 100 && id <= 200)
+            << "id " << r.user_id << " outside range [100,200]";
+    }
+    EXPECT_EQ(std::stoul(results[0].user_id), static_cast<unsigned long>(gt[0]));
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +172,7 @@ TEST_F(MetadataFilterTest, AndFilterCorrectness) {
         MetadataEntry meta;
         meta.strings["type"]    = (i % 2 == 0) ? "A" : "B";
         meta.numerics["weight"] = static_cast<double>(i % 100);
-        engine.insert("test", static_cast<uint32_t>(i), vecs[i].data(), meta);
+        engine.insert("test", std::to_string(i), vecs[i].data(), meta);
     }
 
     auto query = random_vec(dim, rng);
@@ -188,8 +190,9 @@ TEST_F(MetadataFilterTest, AndFilterCorrectness) {
     auto results = engine.search(req);
 
     for (auto& r : results) {
-        EXPECT_EQ(r.id % 2, 0u)       << "id " << r.id << " type != A";
-        EXPECT_LE(r.id % 100, 50u)    << "id " << r.id << " weight > 50";
+        uint32_t id = static_cast<uint32_t>(std::stoul(r.user_id));
+        EXPECT_EQ(id % 2, 0u)       << "id " << r.user_id << " type != A";
+        EXPECT_LE(id % 100, 50u)    << "id " << r.user_id << " weight > 50";
     }
 }
 
@@ -207,7 +210,7 @@ TEST_F(MetadataFilterTest, NoFilterBaseline) {
 
     for (size_t i = 0; i < N; ++i) {
         auto v = random_vec(dim, rng);
-        engine.insert("test", static_cast<uint32_t>(i), v.data());
+        engine.insert("test", std::to_string(i), v.data());
     }
 
     auto q = random_vec(dim, rng);
@@ -234,7 +237,7 @@ TEST_F(MetadataFilterTest, MetadataSurvivesCheckpointRecovery) {
             MetadataEntry meta;
             meta.strings["label"]  = (i % 2 == 0) ? "even" : "odd";
             meta.numerics["value"] = static_cast<double>(i);
-            engine.insert("test", static_cast<uint32_t>(i), vecs[i].data(), meta);
+            engine.insert("test", std::to_string(i), vecs[i].data(), meta);
         }
         engine.checkpoint("test");
         // "Crash" after checkpoint.
@@ -254,7 +257,7 @@ TEST_F(MetadataFilterTest, MetadataSurvivesCheckpointRecovery) {
 
     ASSERT_EQ((int)results.size(), 10);
     for (auto& r : results)
-        EXPECT_EQ(r.id % 2, 0u) << "id " << r.id << " is not even after recovery";
+        EXPECT_EQ(std::stoi(r.user_id) % 2, 0) << "id " << r.user_id << " is not even after recovery";
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +278,7 @@ TEST_F(MetadataFilterTest, MetadataSurvivesWalReplay) {
         for (size_t i = 0; i < N; ++i) {
             MetadataEntry meta;
             meta.strings["label"] = (i % 2 == 0) ? "even" : "odd";
-            engine.insert("test", static_cast<uint32_t>(i), vecs[i].data(), meta);
+            engine.insert("test", std::to_string(i), vecs[i].data(), meta);
         }
         // No checkpoint — metadata must be recovered from WAL.
     }
@@ -293,7 +296,7 @@ TEST_F(MetadataFilterTest, MetadataSurvivesWalReplay) {
 
     ASSERT_EQ((int)results.size(), 10);
     for (auto& r : results)
-        EXPECT_EQ(r.id % 2, 1u) << "id " << r.id << " is not odd after WAL replay";
+        EXPECT_EQ(std::stoi(r.user_id) % 2, 1) << "id " << r.user_id << " is not odd after WAL replay";
 }
 
 // ---------------------------------------------------------------------------
@@ -311,12 +314,12 @@ TEST_F(MetadataFilterTest, RemoveUpdatesMetadata) {
         auto v = random_vec(dim, rng);
         MetadataEntry meta;
         meta.strings["tier"] = (i < 25) ? "gold" : "silver";
-        engine.insert("test", i, v.data(), meta);
+        engine.insert("test", std::to_string(i), v.data(), meta);
     }
 
     // Remove all gold nodes.
     for (uint32_t i = 0; i < 25; ++i)
-        engine.remove("test", i);
+        engine.remove("test", std::to_string(i));
 
     auto q = random_vec(dim, rng);
     SearchRequest req;
@@ -346,7 +349,7 @@ TEST_F(MetadataFilterTest, FilterWithNoCandidatesReturnsEmpty) {
         auto v = random_vec(dim, rng);
         MetadataEntry meta;
         meta.strings["color"] = "red";
-        engine.insert("test", i, v.data(), meta);
+        engine.insert("test", std::to_string(i), v.data(), meta);
     }
 
     auto q = random_vec(dim, rng);
@@ -381,7 +384,7 @@ TEST_F(MetadataFilterTest, CheckpointThenInsertThenRecover) {
         for (uint32_t i = 0; i < 100; ++i) {
             MetadataEntry meta;
             meta.strings["label"] = (i % 2 == 0) ? "even" : "odd";
-            engine.insert("test", i, vecs[i].data(), meta);
+            engine.insert("test", std::to_string(i), vecs[i].data(), meta);
         }
         engine.checkpoint("test");
 
@@ -389,7 +392,7 @@ TEST_F(MetadataFilterTest, CheckpointThenInsertThenRecover) {
         for (uint32_t i = 100; i < 150; ++i) {
             MetadataEntry meta;
             meta.strings["label"] = (i % 2 == 0) ? "even" : "odd";
-            engine.insert("test", i, vecs[i].data(), meta);
+            engine.insert("test", std::to_string(i), vecs[i].data(), meta);
         }
         // "Crash" — engine destroyed without another checkpoint.
     }
@@ -408,7 +411,7 @@ TEST_F(MetadataFilterTest, CheckpointThenInsertThenRecover) {
         auto results = engine.search(req);
         ASSERT_EQ((int)results.size(), 10);
         for (auto& r : results)
-            EXPECT_EQ(r.id % 2, 0u) << "pre-checkpoint: id " << r.id << " is not even";
+            EXPECT_EQ(std::stoi(r.user_id) % 2, 0) << "pre-checkpoint: id " << r.user_id << " is not even";
     }
 
     // Verify post-checkpoint metadata (from WAL).
@@ -422,7 +425,7 @@ TEST_F(MetadataFilterTest, CheckpointThenInsertThenRecover) {
         auto results = engine.search(req);
         ASSERT_EQ((int)results.size(), 5);
         for (auto& r : results)
-            EXPECT_EQ(r.id % 2, 1u) << "post-checkpoint: id " << r.id << " is not odd";
+            EXPECT_EQ(std::stoi(r.user_id) % 2, 1) << "post-checkpoint: id " << r.user_id << " is not odd";
     }
 }
 
@@ -444,12 +447,12 @@ TEST_F(MetadataFilterTest, RemovePersistsAcrossRecovery) {
         for (uint32_t i = 0; i < 50; ++i) {
             MetadataEntry meta;
             meta.strings["tier"] = (i < 25) ? "gold" : "silver";
-            engine.insert("test", i, vecs[i].data(), meta);
+            engine.insert("test", std::to_string(i), vecs[i].data(), meta);
         }
 
         // Remove all gold nodes, then checkpoint.
         for (uint32_t i = 0; i < 25; ++i)
-            engine.remove("test", i);
+            engine.remove("test", std::to_string(i));
         engine.checkpoint("test");
     }
 
