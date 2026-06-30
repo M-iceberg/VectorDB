@@ -133,7 +133,8 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build linux-perf git perl
+          sudo apt-get install -y cmake ninja-build git perl \
+            linux-tools-common linux-tools-generic
           sudo sysctl -w kernel.perf_event_paranoid=1
           sudo sysctl -w kernel.kptr_restrict=0
 
