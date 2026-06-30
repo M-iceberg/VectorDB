@@ -182,12 +182,22 @@ jobs:
           echo "| cache-misses | $MISS_ON | $MISS_OFF |"
           echo "| IPC (insn/cycle) | $IPC_ON | $IPC_OFF |"
 
-      - name: Flamegraph — search hot path (prefetch ON)
+      - name: Perf report — search hot path (prefetch ON)
         run: |
-          perf record -g --call-graph fp -F 99 \
+          perf record -F 99 -o perf.data \
             ./build_prefetch/bench/bench_profile \
               --dim 128 --n 50000 --queries 30000 --ef 200
-          perf script | \
+          echo "=== Top functions by CPU time (prefetch ON) ==="
+          perf report --input=perf.data --stdio --no-children -n 2>&1 | \
+            head -40 | tee perf_report_on.txt
+
+      - name: Flamegraph — search hot path (prefetch ON)
+        continue-on-error: true
+        run: |
+          perf record -g --call-graph dwarf -F 99 -o perf_cg.data \
+            ./build_prefetch/bench/bench_profile \
+              --dim 128 --n 50000 --queries 10000 --ef 200
+          perf script --input=perf_cg.data 2>/dev/null | \
             /tmp/flamegraph/stackcollapse-perf.pl | \
             /tmp/flamegraph/flamegraph.pl \
               --title "VortexDB search hot path (prefetch ON, AVX2, N=50K)" \
@@ -202,6 +212,7 @@ jobs:
           path: |
             perf_on.txt
             perf_off.txt
+            perf_report_on.txt
             flamegraph_prefetch_on.svg
 
   # -------------------------------------------------------------------------
