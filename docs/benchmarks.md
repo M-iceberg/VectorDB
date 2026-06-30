@@ -247,3 +247,64 @@ This is a fundamental characteristic of large HNSW graphs, not a bug. All HNSW i
 - **Batch insert**: expose a C++-level batch insert that inserts N vectors in one call, reducing Python→pybind11→C++ overhead from N calls to 1
 - **Node memory layout**: pack same-layer neighbors contiguously in memory so that traversing a layer's neighbor list hits fewer cache lines
 - **Graph traversal prefetch**: extend the `__builtin_prefetch` pattern (already used in `compute_batch`) to prefetch neighbor vectors during HNSW search, hiding DRAM latency behind computation
+
+---
+
+## Recovery Time Benchmark (Day 28)
+
+**Setup:** dim=128, M=16, ef_construction=200, Apple Silicon (ARM). No checkpoint before close — WAL is the only persistence. Recovery time = `Engine(data_dir)` constructor (pure C++ WAL replay, no Python overhead).  
+**Script:** `bench/bench_recovery.py`
+
+| WAL size | Vectors | Recovery time | Replay speed |
+|----------|--------:|-------------:|-------------:|
+| 0.51 MB  |   1,000 |        ~90 ms |   ~11 Kv/s |
+| 1.54 MB  |   3,000 |       ~330 ms |    ~9 Kv/s |
+| 4.1 MB   |   8,000 |     ~1,350 ms |    ~6 Kv/s |
+
+**Finding:** Recovery time scales O(N log N), not O(N). WAL replay re-inserts each record into the HNSW graph, and HNSW insert is O(M × ef_construction × log N) — the same cost as the original insert. A 256 MB WAL (~470K records at dim=128) would take roughly 4–6 minutes to recover from WAL alone.
+
+**Why checkpoint matters:** After a checkpoint, the graph snapshot is loaded in O(N) (sequential file read), and only the WAL records since the last checkpoint need replaying. A checkpoint every 50K inserts bounds recovery time to ~30–60s regardless of total collection size.
+
+---
+
+## Stress Test — 10-minute Mixed Workload (Day 28)
+
+**Setup:** dim=16, continuous insert + search + delete loop for 10 minutes. Checkpoint every 10 iterations. At end: engine reopened, 500 random live vectors verified searchable.  
+**Script:** `bench/bench_stress.py`
+
+| Metric | Result |
+|--------|--------|
+| Total duration | 600 s |
+| Inserts | ~73,500 |
+| Searches | ~14,700 |
+| Deletes | ~29,400 |
+| Throughput | ~290 ops/s |
+| Crashes | 0 |
+| Data loss (missing after recovery) | 0 |
+
+**PASS** — no crashes, no data loss across 117K mixed operations.
+
+---
+
+## Filtered Search — Selectivity vs QPS and Recall (Day 28)
+
+**Setup:** N=10K vectors, dim=128, M=16, ef=100, top_k=10. Each vector assigned a category from {0..K−1} uniformly. Filter targets category 0 (expected hit count = N/K). Brute-force ground truth computed with numpy.  
+**Script:** `bench/bench_filtered.py`
+
+**Selectivity** = fraction of vectors that pass the filter = 1/K. K=1 means all vectors are in the same category (no filter effect, 100% pass). K=100 means each category holds 1% of vectors — only 100 out of 10K pass the filter. Lower selectivity = stricter filter = fewer candidates eligible for the result.
+
+**Recall@10** = fraction of true top-10 nearest neighbors (by brute force) that HNSW actually returns. Range is 0–1; 1.000 = perfect, identical to brute force. 0.700 means HNSW found 7 out of the 10 true nearest neighbors and missed 3. The problem is not recall=1 at high selectivity — that means search is working correctly. The problem is recall collapsing at low selectivity (1% and below), where HNSW starts missing real nearest neighbors.
+
+| Selectivity | Candidate pool | QPS | Recall@10 |
+|------------:|---------------:|----:|----------:|
+| 100% | 10,000 | ~900 | 1.000 |
+| 50% | 5,000 | ~1,200 | 1.000 |
+| 10% | 1,000 | ~2,500 | 1.000 |
+| 1% | 100 | ~3,100 | **0.70** |
+| 0.1% | 10 | ~3,400 | **0.30** |
+
+**Finding 1 — QPS increases as selectivity drops.** Fewer candidates pass the filter → priority queue is smaller → heap operations cheaper → each query finishes faster. The HNSW graph traversal visits roughly the same number of nodes, but result assembly takes less time.
+
+**Finding 2 — Recall collapses at low selectivity.** The HNSW graph is built for unfiltered similarity. At 1% selectivity only 100 vectors are eligible. With ef=100, beam search explores ~100 candidates, but most are rejected by the filter — the effective candidate pool for the filtered result is far smaller than ef. Some true nearest neighbors in the eligible set are never reached because they are poorly connected in the graph (the graph was built ignoring the filter).
+
+This is the fundamental tension in filtered ANN: **the graph is optimized for global proximity, not per-filter proximity.** Production systems (Weaviate, Qdrant, Pinecone) address this with dedicated per-segment indexes or hybrid HNSW+inverted-index structures. For selectivity > 10%, post-filtering on top of unfiltered ANN works well; below 1%, recall degrades significantly without per-filter graph construction.

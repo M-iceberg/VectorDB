@@ -216,6 +216,43 @@ jobs:
             flamegraph_prefetch_on.svg
 
   # -------------------------------------------------------------------------
+  # Day 28: recovery benchmark + stress test + filtered search selectivity
+  # All three use --ci flag for shorter runtimes suitable for CI.
+  # -------------------------------------------------------------------------
+  day28-benchmarks:
+    name: Recovery benchmark + stress test + filtered search (Day 28)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build python3-pip python3-numpy
+
+      - name: Install build dependencies
+        run: pip3 install scikit-build-core pybind11
+
+      - name: pip install
+        run: pip3 install . --no-build-isolation
+
+      - name: Recovery benchmark (--ci)
+        run: python3 bench/bench_recovery.py --ci 2>&1 | tee recovery_results.txt
+
+      - name: Stress test (60s, --ci)
+        run: python3 bench/bench_stress.py --ci 2>&1 | tee stress_results.txt
+
+      - name: Filtered search selectivity (--ci)
+        run: python3 bench/bench_filtered.py --ci 2>&1 | tee filtered_results.txt
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: day28-benchmark-results
+          path: |
+            recovery_results.txt
+            stress_results.txt
+            filtered_results.txt
+
+  # -------------------------------------------------------------------------
   # x86 (ubuntu-latest): tests AVX2 path and verifies x86 compilation
   # -------------------------------------------------------------------------
   test-x86:
