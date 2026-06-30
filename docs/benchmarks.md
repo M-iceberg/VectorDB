@@ -255,13 +255,15 @@ This is a fundamental characteristic of large HNSW graphs, not a bug. All HNSW i
 **Setup:** dim=128, M=16, ef_construction=200, Apple Silicon (ARM). No checkpoint before close — WAL is the only persistence. Recovery time = `Engine(data_dir)` constructor (pure C++ WAL replay, no Python overhead).  
 **Script:** `bench/bench_recovery.py`
 
-| WAL size | Vectors | Recovery time | Replay speed |
-|----------|--------:|-------------:|-------------:|
-| 0.51 MB  |   1,000 |        ~90 ms |   ~11 Kv/s |
-| 1.54 MB  |   3,000 |       ~330 ms |    ~9 Kv/s |
-| 4.1 MB   |   8,000 |     ~1,350 ms |    ~6 Kv/s |
+| WAL size | Vectors | macOS (ARM) | x86 CI (AMD EPYC) | Replay speed (x86) |
+|----------|--------:|------------:|------------------:|-------------------:|
+| 0.51 MB  |   1,000 |      ~90 ms |            ~90 ms |          ~11 Kv/s |
+| 1.54 MB  |   3,000 |     ~330 ms |           ~510 ms |           ~6 Kv/s |
+| 4.1 MB   |   8,000 |   ~1,350 ms |         ~2,190 ms |           ~4 Kv/s |
 
-**Finding:** Recovery time scales O(N log N), not O(N). WAL replay re-inserts each record into the HNSW graph, and HNSW insert is O(M × ef_construction × log N) — the same cost as the original insert. A 256 MB WAL (~470K records at dim=128) would take roughly 4–6 minutes to recover from WAL alone.
+x86 CI is ~60% slower than macOS at N=8K. The virtualized AMD EPYC runner has lower single-core throughput for HNSW graph construction, which is the bottleneck during WAL replay.
+
+**Finding:** Recovery time scales O(N log N), not O(N). WAL replay re-inserts each record into the HNSW graph, and HNSW insert is O(M × ef_construction × log N) — the same cost as the original insert. Replay speed drops from ~11 Kv/s at N=1K to ~4 Kv/s at N=8K as the graph deepens. A 256 MB WAL (~470K records at dim=128) would take roughly 15–25 minutes to recover from WAL alone on CI-class hardware.
 
 **Why checkpoint matters:** After a checkpoint, the graph snapshot is loaded in O(N) (sequential file read), and only the WAL records since the last checkpoint need replaying. A checkpoint every 50K inserts bounds recovery time to ~30–60s regardless of total collection size.
 
@@ -272,17 +274,18 @@ This is a fundamental characteristic of large HNSW graphs, not a bug. All HNSW i
 **Setup:** dim=16, continuous insert + search + delete loop for 10 minutes. Checkpoint every 10 iterations. At end: engine reopened, 500 random live vectors verified searchable.  
 **Script:** `bench/bench_stress.py`
 
-| Metric | Result |
-|--------|--------|
-| Total duration | 600 s |
-| Inserts | ~73,500 |
-| Searches | ~14,700 |
-| Deletes | ~29,400 |
-| Throughput | ~290 ops/s |
-| Crashes | 0 |
-| Data loss (missing after recovery) | 0 |
+| Metric | macOS (ARM, 10 min) | x86 CI (AMD EPYC, 60s) |
+|--------|--------------------:|----------------------:|
+| Inserts | ~73,500 | 47,000 |
+| Searches | ~14,700 | 9,400 |
+| Deletes | ~29,400 | 18,780 |
+| Throughput | ~290 ops/s | **1,252 ops/s** |
+| Crashes | 0 | 0 |
+| Data loss | 0 | 0 |
 
-**PASS** — no crashes, no data loss across 117K mixed operations.
+**PASS on both platforms** — no crashes, no data loss.
+
+x86 CI runs 4.3× faster than macOS for this workload. The stress test uses dim=16: AVX2 computes 16-float L2 distance in 2 SIMD instructions (8 floats/op), while NEON needs 4 (4 floats/op). The 2× SIMD advantage at dim=16, combined with faster x86 integer branch throughput for graph traversal, explains most of the gap.
 
 ---
 
