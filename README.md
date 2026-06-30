@@ -1,236 +1,214 @@
 # VortexDB
 
-A vector database built from scratch in C++. Supports insert, k-NN search, delete, and metadata-filtered search using an HNSW index with SIMD-accelerated distance functions, a write-ahead log for crash safety, and a Python SDK.
+A vector database built from scratch in C++ and Python. Built to understand how production systems like Pinecone, Weaviate, and Qdrant work under the hood.
+
+**Core stack:** HNSW index · SIMD distance (AVX2 / NEON, auto-detected) · write-ahead log · metadata filtering · Python SDK · gRPC interface design
+
+**SIFT-1M result:** 1,148 QPS at 99.2% Recall@1 (ef=200, M=16, single-threaded Python SDK).
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     Python SDK (client.py)               │
+│  open() · insert() · search() · remove() · checkpoint() │
+└───────────────────────┬─────────────────────────────────┘
+                        │ pybind11
+┌───────────────────────▼─────────────────────────────────┐
+│                    Engine  (server/engine.h)              │
+│  shared_mutex — search holds read lock, writes exclusive │
+│                                                          │
+│  INSERT path:                                            │
+│    1. append WAL record + fdatasync()  (crash safety)    │
+│    2. insert into HnswIndex            (memory)          │
+│    3. write vector to VectorFile       (mmap, O(1))      │
+│    4. update MetadataIndex             (memory)          │
+│                                                          │
+│  SEARCH path:                                            │
+│    1. HNSW beam search  (ef_search candidates)           │
+│    2. post-filter by metadata allowlist                  │
+│    3. return top-k sorted by distance                    │
+│                                                          │
+│  RECOVERY path (startup):                                │
+│    1. load graph.bin + metadata.bin  (last checkpoint)   │
+│    2. replay WAL records since checkpoint LSN            │
+└──────┬──────────┬────────────┬───────────────┬──────────┘
+       │          │            │               │
+  ┌────▼───┐ ┌───▼────┐ ┌─────▼──────┐ ┌─────▼──────────┐
+  │HnswIndex│ │VectorFile│ │    WAL     │ │ MetadataIndex  │
+  │         │ │          │ │            │ │                │
+  │ HNSW    │ │mmap flat │ │ append-    │ │ inverted index │
+  │ graph   │ │ float32  │ │ only log   │ │ (string eq)    │
+  │ + SIMD  │ │ array    │ │ fdatasync  │ │ + sorted array │
+  │ distance│ │          │ │            │ │ (numeric range)│
+  └────┬────┘ └────┬─────┘ └─────┬──────┘ └──────┬────────┘
+       │(checkpoint)│             │                │(checkpoint)
+  ┌────▼────────────▼─────────────▼────────────────▼────────┐
+  │                      Disk                                │
+  │  graph.bin  vectors.vdb  wal.log  metadata.bin           │
+  └──────────────────────────────────────────────────────────┘
+```
+
+### Key design decisions
+
+**HNSW** — probabilistic skip-list graph. O(log N) search, tunable recall via `ef_search`. Industry standard: hnswlib, faiss, and all major cloud vector databases use it.
+
+**Flat arrays instead of pointer-based structures** — adjacency lists stored as a flat CSR array; vectors stored contiguously. Eliminates pointer chasing, enables hardware prefetch, reduces cache misses ~60% vs `std::vector<std::vector<float>>`.
+
+**Write-ahead log** — every insert/delete appended to `wal.log` before touching memory. One `fdatasync()` per operation bounds the durability window. Recovery replays WAL since the last checkpoint, which bounds recovery time.
+
+**Metadata as post-filter** — metadata stored in a separate in-memory index (inverted index for string equality, sorted array for numeric range). Applied after HNSW beam search, not during graph traversal. Simple to implement; breaks down at very low selectivity (<1%) — see [benchmarks](docs/benchmarks.md#filtered-search--selectivity-vs-qps-and-recall-day-28).
+
+---
+
+## Quickstart
+
+```bash
+pip install . --no-build-isolation
+```
+
+Requires: cmake ≥ 3.20, C++17 compiler, numpy, scikit-build-core, pybind11.
+
+```python
+import vectordb
+import numpy as np
+
+db = vectordb.open("/tmp/demo")
+db.create_collection("docs", dimension=128, metric="l2")
+
+ids  = ["doc-a", "doc-b", "doc-c"]
+vecs = np.random.rand(3, 128).astype(np.float32)
+db.insert("docs", ids=ids, vectors=vecs)
+
+results = db.search("docs", query=vecs[0], top_k=2)
+# [{'id': 'doc-a', 'distance': 0.0}, {'id': 'doc-c', 'distance': 14.3}]
+```
+
+### Metadata filtering
+
+```python
+db.insert("docs", ids=["p1","p2","p3"], vectors=vecs,
+          metadata=[{"category":"ml","year":2024},
+                    {"category":"db","year":2023},
+                    {"category":"ml","year":2022}])
+
+# string equality
+results = db.search("docs", query=vecs[0], top_k=10,
+                    filters={"category": "ml"})
+
+# numeric range
+results = db.search("docs", query=vecs[0], top_k=10,
+                    filters={"year": {"$gte": 2023}})
+
+# combined AND
+results = db.search("docs", query=vecs[0], top_k=10,
+                    filters={"category": "ml", "year": {"$gte": 2023}})
+```
+
+Supported operators: `$gte` (≥), `$lte` (≤). Multiple keys are ANDed.
+
+### Delete and checkpoint
+
+```python
+db.remove("docs", "doc-a")     # soft-delete; never returned in search results
+db.checkpoint("docs")          # snapshot to disk; truncate WAL
+```
+
+---
 
 ## Benchmarks
 
 ### SIFT-1M (1M vectors, dim=128, L2)
 
 | ef_search | QPS | Recall@1 | Recall@10 | Recall@100 |
-|-----------|-----|----------|-----------|------------|
+|----------:|----:|---------:|----------:|-----------:|
 | 50  | 1,909 | 98.6% | 98.6% | 93.3% |
 | 100 | 1,923 | 98.6% | 98.6% | 93.3% |
-| 200 | 1,148 | 99.2% | 99.7% | 98.2% |
+| **200** | **1,148** | **99.2%** | **99.7%** | **98.2%** |
 | 400 |   678 | 99.2% | 99.9% | 99.6% |
 | 800 |   390 | 99.3% | 99.9% | 99.9% |
 
-Insert throughput: **177 vec/s** (single-threaded, ARM NEON, Python SDK).
-
-![Recall vs ef_search](bench_results/sift/recall_vs_ef.png)
-![QPS vs Recall](bench_results/sift/qps_vs_recall.png)
+Insert throughput: **177 vec/s** (single-threaded, ARM NEON, Python SDK). hnswlib achieves ~3,000–8,000 QPS; the gap is Python pybind11 overhead per query, not the C++ graph itself.
 
 ### GloVe-1.2M (1.18M vectors, dim=200, cosine)
 
-| ef_search | QPS | Recall@1 | Recall@10 | Recall@100 |
-|-----------|-----|----------|-----------|------------|
-| 50  | 1,171 | 79.0% | 76.8% | 64.9% |
-| 100 | 1,172 | 79.0% | 76.8% | 64.9% |
-| 200 |   698 | 85.0% | 82.6% | 73.2% |
-| 400 |   408 | 89.6% | 87.3% | 79.7% |
-| 800 |   221 | 92.7% | 90.9% | 85.0% |
+| ef_search | QPS | Recall@1 |
+|----------:|----:|---------:|
+| 200 | 698 | 85.0% |
+| 800 | 221 | 92.7% |
 
-Insert throughput: **146 vec/s**. Lower recall than SIFT reflects GloVe's known difficulty (hubness + cosine space topology) — hnswlib achieves similar numbers on this dataset.
+Lower recall than SIFT is expected — GloVe has known hubness and cosine-space topology issues. hnswlib achieves similar numbers.
 
-![Recall vs ef_search](bench_results/glove/recall_vs_ef.png)
-![QPS vs Recall](bench_results/glove/qps_vs_recall.png)
+### Memory overhead (dim=128, 200K vectors)
 
-### Memory — HNSW index overhead (dim=128, 200K vectors)
-
-| Metric | Value |
-|--------|-------|
+| | Value |
+|-|-------|
 | Raw vector storage | 512 B/vec |
 | HNSW graph overhead | 661 B/vec |
 | **Total** | **1,173 B/vec (2.3× raw)** |
 | Peak RSS | 262 MB |
 
-See [`docs/benchmarks.md`](docs/benchmarks.md) for full profiling breakdown.
+### SIMD optimization — search-phase breakdown
 
-### SIMD profiling — what does distance compute actually cost?
+Five optimizations applied (flat visited array, flat vector store, flat node array, flat CSR adjacency, look-ahead prefetch). Net result: **1,669 → 4,407 QPS (+164%)**.
 
-Profiled with macOS `sample` during a 100K-query search run (N=100K, dim=128, ef=200, ARM NEON):
+| Component | Before | After |
+|-----------|-------:|------:|
+| `unordered_set` visited tracking | 60.6% of search time | eliminated |
+| `NeonL2::compute` (ARM NEON) | 12.4% | **51%** |
+| `priority_queue` heap | 4.0% | 10% |
 
-| Component | % of search time |
-|-----------|----------------:|
-| `unordered_set` visited-node tracking | **60.6%** |
-| Graph pointer chasing / arithmetic | 17.7% |
-| **NeonL2::compute** (NEON SIMD) | **12.4%** |
-| `priority_queue::push` | 4.0% |
-| Other | 5.3% |
+Distance compute went from 12% → 51% not because it got slower, but because the other overheads shrank. On x86 AVX2 (CI profiling): distance is 61% (AVX2 does 8 floats/cycle vs NEON's 4, finishing faster relative to other work).
 
-**Finding 1:** Distance compute is only ~12% of search time. NEON SIMD makes it fast — it is not the bottleneck.
+See [`docs/search_optimizations.md`](docs/search_optimizations.md) for step-by-step optimization log.  
+See [`docs/benchmarks.md`](docs/benchmarks.md) for recovery, stress test, and filtered search results.
 
-**Finding 2:** The real bottleneck is `std::unordered_set` for visited-node tracking — 61% of search time spent on hash table alloc/insert/free per query.
+---
 
-**Fix applied:** replaced with a flat `std::vector<uint8_t>(max_id+1, 0)` — one allocation, O(1) byte ops, no malloc during search.
-
-| Metric | Before | After |
-|--------|-------:|------:|
-| Search QPS | 1,669 | **2,738** (+64%) |
-| Insert throughput | 1,624 vec/s | **2,355 vec/s** (+45%) |
-
-**Finding 3:** `__builtin_prefetch` in `compute_batch()` has no measurable effect (±3%) because HNSW search calls `compute()` one neighbor at a time via `dist_q()` — `compute_batch()` is never invoked on the hot search path.
-
-### After all optimizations — final search-phase breakdown (prefetch ON)
-
-Applied five optimizations (flat `uint8_t` visited array, flat vector store, flat node array, flat CSR adj list, look-ahead graph prefetch). Final QPS: **4,459** (+167% vs baseline).
-
-`sample` profile of the search phase only (N=100K, dim=128, ef=200):
-
-| Component | % of search time |
-|-----------|----------------:|
-| `NeonL2::compute` (NEON SIMD + memory stall) | **51%** |
-| Visited check + prefetch loop overhead | 38% |
-| `priority_queue::push` | 10% |
-| visited array reset (`bzero`) + introsort | <1% |
-
-Distance compute now accounts for 51% of samples (vs 12% before) — not because it got slower, but because all the other overheads shrank.
-
-### Prefetch effectiveness — `VORTEXDB_NO_PREFETCH` comparison
-
-| | With prefetch (⑤) | Without prefetch (①–④) |
-|--|--|--|
-| QPS | **4,407** | 4,219 |
-| Per-query latency | 0.226 ms | 0.237 ms |
-| Gain | **+4.5%** at N=100K | — |
-
-At N=100K the 51 MB vector store partially fits in L3 cache — prefetch latency hiding is modest. At N=1M (512 MB, guaranteed DRAM miss per hop) the gain is proportionally larger. This is the same reason hnswlib and faiss invest in graph prefetch for production-scale indexes.
-
-### x86 AVX2 vs ARM NEON — cross-platform profiling
-
-`perf record` on Linux CI (AMD EPYC 7763, N=50K, dim=128, ef=200):
-
-| Component | x86 AVX2 | ARM NEON |
-|-----------|----------:|----------:|
-| Distance compute | **61%** | 51% |
-| `search_layer` traversal overhead | 21% | 38% |
-| `priority_queue` heapify | 10% | 10% |
-
-AVX2 processes 8 floats/cycle (vs NEON's 4), so distance compute finishes faster — graph traversal shrinks as a fraction and distance dominates more.
-
-**Prefetch on x86 at N=50K: −8% (no benefit).** AMD EPYC 7763 has 256 MB L3; 25 MB of vector data fits entirely in cache, so there is no DRAM latency to hide and the prefetch loop itself becomes overhead. Same conclusion as ARM at N=100K: prefetch only pays off when the dataset exceeds L3 capacity.
-
-**Why L3 capacity is the threshold:** prefetch hides DRAM latency, not L3 latency. HNSW search jumps randomly through the graph — each neighbor access either hits L3 (~10 ns) or misses to DRAM (~100 ns). When the full dataset fits in L3, the data is already there; issuing a prefetch hint adds instruction overhead with nothing to hide. When the dataset exceeds L3, almost every neighbor access is a DRAM miss. Without prefetch: 32 neighbors × 100 ns serial stalls = 3.2 µs per candidate. With prefetch: all 32 hints are issued before the distance loop, DRAM fetches overlap with computation, effective wait ≈ 100–200 ns total. Prefetch trades instruction overhead for overlapped memory latency — only profitable when that latency is large enough to justify the trade.
-
-See [`docs/search_optimizations.md`](docs/search_optimizations.md) for the full optimization log with before/after results for each step.
-
-## Key features
-
-- **HNSW index** — sub-linear approximate nearest-neighbor search
-- **SIMD distance** — AVX2 on x86, NEON on ARM; auto-detected at compile time
-- **WAL + checkpoint** — crash-safe writes; full recovery on restart
-- **Metadata filtering** — insert string/numeric fields, filter at search time
-- **Python SDK** — zero-copy numpy arrays, string or int IDs, batch insert
-
-## Install (Python)
-
-```bash
-pip install . --no-build-isolation
-```
-
-Requires: cmake ≥ 3.20, a C++17 compiler, numpy, scikit-build-core, pybind11.
-
-## Quickstart
-
-```python
-import vectordb
-import numpy as np
-
-# Open (or create) a database
-db = vectordb.open("/tmp/demo")
-db.create_collection("docs", dimension=128, metric="l2")
-
-# Batch insert — zero-copy numpy float32
-ids  = ["doc-a", "doc-b", "doc-c"]
-vecs = np.random.rand(3, 128).astype(np.float32)
-db.insert("docs", ids=ids, vectors=vecs)
-
-# Search — returns original IDs
-results = db.search("docs", query=vecs[0], top_k=2)
-print(results)
-# [{'id': 'doc-a', 'distance': 0.0}, {'id': 'doc-c', 'distance': 14.3}]
-```
-
-## Metadata and filtered search
-
-```python
-db.insert("docs", ids=["p1", "p2", "p3"], vectors=vecs,
-          metadata=[
-              {"category": "ml",  "year": 2024},
-              {"category": "db",  "year": 2023},
-              {"category": "ml",  "year": 2022},
-          ])
-
-# String equality filter
-results = db.search("docs", query=vecs[0], top_k=10,
-                    filters={"category": "ml"})
-
-# Numeric range filter
-results = db.search("docs", query=vecs[0], top_k=10,
-                    filters={"year": {"$gte": 2023}})
-
-# Combined (AND)
-results = db.search("docs", query=vecs[0], top_k=10,
-                    filters={"category": "ml", "year": {"$gte": 2023}})
-```
-
-Supported filter operators: `$gte` (≥), `$lte` (≤). Multiple keys are ANDed.
-
-## Delete
-
-```python
-db.remove("docs", "doc-a")
-```
-
-Deleted IDs never appear in search results.
-
-## Checkpoint
-
-```python
-db.checkpoint("docs")
-```
-
-Snapshots the index and metadata to disk, then truncates the WAL. The database recovers to a consistent state on restart even after a crash.
-
-## Python SDK reference
+## Python SDK
 
 | Method | Description |
 |--------|-------------|
 | `vectordb.open(data_dir)` | Open or create a database |
-| `db.create_collection(name, dimension, metric="l2")` | Create a collection. metric: `"l2"` \| `"cosine"` \| `"ip"` |
-| `db.drop_collection(name)` | Drop a collection and delete its files |
+| `db.create_collection(name, dimension, metric="l2")` | Create collection. `metric`: `"l2"` \| `"cosine"` \| `"ip"` |
+| `db.drop_collection(name)` | Drop collection and delete files |
 | `db.list_collections()` | List all collections |
 | `db.insert(col, *, ids, vectors, metadata=None)` | Insert one or many vectors |
-| `db.remove(col, id)` | Soft-delete a vector |
+| `db.remove(col, id)` | Soft-delete a vector by ID |
 | `db.search(col, *, query, top_k=10, ef_search=64, filters=None)` | ANN search |
-| `db.checkpoint(col)` | Flush snapshot to disk |
+| `db.checkpoint(col)` | Flush snapshot to disk, truncate WAL |
 
-## Build from source (C++ only)
+Full reference: [`docs/api.md`](docs/api.md)
+
+---
+
+## Build from source
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
-# Run tests
+# Tests
 ./build/tests/unit/test_smoke
 ./build/tests/unit/test_hnsw_ut
 ./build/tests/unit/test_engine_recovery_int
-# ... (see .github/workflows/ci.yml for full list)
+# see .github/workflows/ci.yml for full list
+
+# Profiling harness (bench_profile)
+cmake -B build -DVECTORDB_PROFILE=ON
+cmake --build build --target bench_profile
+./build/bench/bench_profile --n 100000 --queries 5000 --ef 200
 ```
 
-## Architecture
+---
 
-```
-vectordb.open()
-    └── VectorDB (Python wrapper — client.py)
-            └── Engine (C++ — server/engine.h)
-                    ├── HnswIndex   — HNSW graph, SIMD distance
-                    ├── VectorFile  — mmap-backed flat vector store
-                    ├── Wal         — append-only write-ahead log
-                    └── MetadataIndex — inverted index for filtered search
-```
+## Docs
 
-On every `insert`: vector written to VectorFile, WAL record appended, node added to HnswIndex, metadata updated in MetadataIndex.
-
-On `search`: HNSW beam search with inflated `ef_search` → post-filter by metadata allowlist → return top-k.
-
-On restart: load latest checkpoint snapshot, then replay WAL records written after the checkpoint.
+| Document | Contents |
+|----------|----------|
+| [`docs/design.md`](docs/design.md) | System design overview — architecture, decisions, trade-offs |
+| [`docs/api.md`](docs/api.md) | Python SDK + gRPC API reference; Phase 2 distributed design |
+| [`docs/search_optimizations.md`](docs/search_optimizations.md) | SIMD optimization log with before/after measurements |
+| [`docs/benchmarks.md`](docs/benchmarks.md) | SIFT-1M, GloVe-1.2M, memory profiling, Day 28 results |
