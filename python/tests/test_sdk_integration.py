@@ -47,7 +47,7 @@ def test_insert_search_delete_search(tmp_path):
 
     # Search before delete — id 5 is nearest to vecs[5]
     results = db.search("col", query=vecs[5], top_k=3)
-    assert results[0]["id"] == 5
+    assert results[0]["id"] == "5"
     assert results[0]["distance"] < 1e-5
 
     # Delete id 5
@@ -55,7 +55,7 @@ def test_insert_search_delete_search(tmp_path):
 
     # id 5 must not appear after delete
     results = db.search("col", query=vecs[5], top_k=5)
-    assert all(r["id"] != 5 for r in results)
+    assert all(r["id"] != "5" for r in results)
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ def test_filtered_search_string_eq(tmp_path):
     results = db.search("col", query=make_vecs(1, seed=99)[0],
                         top_k=10, filters={"tag": "even"})
     ids = {r["id"] for r in results}
-    assert ids <= {0, 2, 4, 6, 8}
+    assert ids <= {"0", "2", "4", "6", "8"}
     assert len(ids) == 5
 
 
@@ -108,7 +108,7 @@ def test_filtered_search_numeric_range(tmp_path):
     results = db.search("col", query=make_vecs(1, seed=77)[0],
                         top_k=10, filters={"score": {"$gte": 3.0, "$lte": 6.0}})
     ids = {r["id"] for r in results}
-    assert ids <= {3, 4, 5, 6}
+    assert ids <= {"3", "4", "5", "6"}
     assert len(ids) == 4
 
 
@@ -128,7 +128,7 @@ def test_filtered_search_combined(tmp_path):
                         top_k=10,
                         filters={"cat": "A", "val": {"$gte": 2.0}})
     ids = {r["id"] for r in results}
-    assert ids == {2, 3}
+    assert ids == {"2", "3"}
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ def test_delete_then_filtered_search(tmp_path):
     results = db.search("col", query=vecs[3], top_k=6,
                         filters={"tag": "keep"})
     ids = {r["id"] for r in results}
-    assert 3 not in ids
+    assert "3" not in ids
     assert len(ids) == 5
 
 
@@ -167,10 +167,8 @@ def test_multi_collection(tmp_path):
     ra = db.search("col_a", query=vecs_a[0], top_k=1)
     rb = db.search("col_b", query=vecs_b[0], top_k=1)
 
-    # Nearest in col_a to vecs_a[0] is itself (distance ≈ 0)
-    assert ra[0]["id"] == 0 and ra[0]["distance"] < 1e-5
-    # Nearest in col_b to vecs_b[0] is itself
-    assert rb[0]["id"] == 0 and rb[0]["distance"] < 1e-5
+    assert ra[0]["id"] == "0" and ra[0]["distance"] < 1e-5
+    assert rb[0]["id"] == "0" and rb[0]["distance"] < 1e-5
 
     cols = {c["name"] for c in db.list_collections()}
     assert cols == {"col_a", "col_b"}
@@ -191,14 +189,12 @@ def test_checkpoint_recovery(tmp_path):
     del db1
 
     db2 = vectordb.open(path)
-    # All 8 nodes present
     results = db2.search("col", query=vecs[0], top_k=8)
     assert len(results) == 8
 
-    # Metadata filter still works after recovery
     gold = db2.search("col", query=vecs[0], top_k=8,
                       filters={"tier": "gold"})
-    assert {r["id"] for r in gold} == {0, 1, 2, 3}
+    assert {r["id"] for r in gold} == {"0", "1", "2", "3"}
 
 
 # ---------------------------------------------------------------------------
@@ -216,9 +212,8 @@ def test_recall_1k(tmp_path):
     hits = 0
     for q in query:
         results = db.search("col", query=q, top_k=10, ef_search=64)
-        # brute-force ground truth
         dists = np.sum((vecs - q) ** 2, axis=1)
-        gt = int(np.argmin(dists))
+        gt = str(int(np.argmin(dists)))   # IDs are strings now
         if any(r["id"] == gt for r in results):
             hits += 1
 
