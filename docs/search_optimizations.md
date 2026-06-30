@@ -323,6 +323,30 @@ cmake --build build_prefetch   -j8 --target vortex_core vortex_storage vortex_se
 
 For a visual flamegraph, use Linux `perf record -g` + `flamegraph.pl` (brendangregg/FlameGraph). On macOS with Xcode: `xctrace record --template "Time Profiler"`. Both are equivalent to the `sample` call graph above but render as an SVG.
 
+### x86 AVX2 profiling (Linux CI, AMD EPYC 7763, N=50K)
+
+Profiled with `perf record -F 99` + `perf report --stdio` on GitHub Actions (ubuntu-latest). Hardware PMU counters (`cycles`, `instructions`, `cache-misses`) showed `<not supported>` — GitHub Actions uses virtualized VMs that do not expose hardware PMU to the guest. For real cache-miss counts, a bare-metal instance (e.g. AWS `c5n.metal`) is needed.
+
+Function-level breakdown from PC sampling:
+
+| Function | x86 AVX2 | ARM NEON |
+|----------|----------:|----------:|
+| Distance compute (`Avx2L2` / `NeonL2`) | **61%** | 51% |
+| `search_layer` traversal overhead | 21% | 38% |
+| `priority_queue` heapify | 10% | 10% |
+| Sort / alloc / other | 8% | 1% |
+
+AVX2 processes 8 floats per cycle vs NEON's 4, so distance compute finishes faster in wall-clock time. The graph traversal overhead shrinks proportionally, making distance the dominant fraction (61% vs 51%). Both platforms show ~10% in priority queue operations — this is architecture-independent.
+
+**Prefetch comparison on x86 (N=50K):**
+
+| | Prefetch ON | Prefetch OFF |
+|--|--|--|
+| QPS | 3,037 | 3,290 |
+| Prefetch gain | **−8%** (overhead > benefit) | — |
+
+At N=50K, `vecs_flat_` is 25.6 MB. AMD EPYC 7763 has 256 MB L3 per socket — the entire working set fits in L3, so there is no DRAM latency to hide. The prefetch loop itself adds overhead that outweighs the benefit. This confirms the earlier finding from macOS: **prefetch is only beneficial when the dataset exceeds L3 capacity** (~N=200K+ on this hardware).
+
 ---
 
 ## Why graph prefetch required flat data structures first
