@@ -50,17 +50,33 @@ The gap between 5% and 12% reflects cache effects: the contiguous microbenchmark
 
 Replacing the per-search `std::unordered_set` with a flat bitset (or a generation-counter array) would eliminate the 61% allocation overhead. At 100K nodes, a bitset needs 12.5 KB — fits in L2 cache. This is the highest-leverage optimization available and would be the first change in a production hardening pass.
 
-### Linux (AVX2) — perf stat (CI)
+### Linux (AVX2) — perf report (CI, AMD EPYC 7763)
 
-GitHub Actions `ubuntu-latest` (x86, AVX2), measured via `perf stat`:
+GitHub Actions `ubuntu-latest` (x86-64, AVX2), N=50K, dim=128, ef=200. Profiled with `perf record -F 99` + `perf report --stdio`.
 
-| Event | Value |
-|-------|-------|
-| IPC (instructions / cycle) | ~1.6–1.8 |
-| Cache-miss rate | ~8–12% (L3) |
-| Distance compute fraction | ~10–15% |
+Hardware PMU counters (`cycles`, `instructions`, `cache-misses`) showed `<not supported>` — GitHub Actions VMs do not expose hardware PMU to the guest. PC sampling still works.
 
-See `.github/workflows/ci.yml` → `simd-profiling` job for raw output.
+**Function breakdown (prefetch ON):**
+
+| Function | x86 AVX2 | ARM NEON |
+|----------|----------:|----------:|
+| Distance compute (`Avx2L2::compute`) | **61%** | 51% |
+| `search_layer` traversal overhead | 21% | 38% |
+| `priority_queue` heapify | 10% | 10% |
+| Sort / alloc / other | 8% | 1% |
+
+AVX2 processes 8 floats/cycle vs NEON's 4, so distance finishes faster in wall time. The graph traversal fraction shrinks proportionally, making distance the dominant fraction on x86.
+
+**Prefetch comparison (N=50K, AMD EPYC 7763):**
+
+| | Prefetch ON | Prefetch OFF |
+|--|--:|--:|
+| QPS | 3,037 | 3,290 |
+| Gain | −8% (overhead > benefit) | — |
+
+At N=50K, `vecs_flat_` is 25.6 MB. AMD EPYC 7763 has 256 MB L3 — the full working set fits, so there is no DRAM latency to hide and the prefetch loop itself becomes net overhead. Consistent with the macOS finding at N=100K (+4.5%): **prefetch is only beneficial when dataset size exceeds L3 capacity**.
+
+For hardware PMU counters (IPC, cache-miss rate), a bare-metal instance (e.g. AWS `c5n.metal`) is needed. See `.github/workflows/ci.yml` → `simd-profiling` job for raw output.
 
 ---
 

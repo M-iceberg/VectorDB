@@ -95,6 +95,22 @@ Distance compute now accounts for 51% of samples (vs 12% before) — not because
 
 At N=100K the 51 MB vector store partially fits in L3 cache — prefetch latency hiding is modest. At N=1M (512 MB, guaranteed DRAM miss per hop) the gain is proportionally larger. This is the same reason hnswlib and faiss invest in graph prefetch for production-scale indexes.
 
+### x86 AVX2 vs ARM NEON — cross-platform profiling
+
+`perf record` on Linux CI (AMD EPYC 7763, N=50K, dim=128, ef=200):
+
+| Component | x86 AVX2 | ARM NEON |
+|-----------|----------:|----------:|
+| Distance compute | **61%** | 51% |
+| `search_layer` traversal overhead | 21% | 38% |
+| `priority_queue` heapify | 10% | 10% |
+
+AVX2 processes 8 floats/cycle (vs NEON's 4), so distance compute finishes faster — graph traversal shrinks as a fraction and distance dominates more.
+
+**Prefetch on x86 at N=50K: −8% (no benefit).** AMD EPYC 7763 has 256 MB L3; 25 MB of vector data fits entirely in cache, so there is no DRAM latency to hide and the prefetch loop itself becomes overhead. Same conclusion as ARM at N=100K: prefetch only pays off when the dataset exceeds L3 capacity.
+
+**Why L3 capacity is the threshold:** prefetch hides DRAM latency, not L3 latency. HNSW search jumps randomly through the graph — each neighbor access either hits L3 (~10 ns) or misses to DRAM (~100 ns). When the full dataset fits in L3, the data is already there; issuing a prefetch hint adds instruction overhead with nothing to hide. When the dataset exceeds L3, almost every neighbor access is a DRAM miss. Without prefetch: 32 neighbors × 100 ns serial stalls = 3.2 µs per candidate. With prefetch: all 32 hints are issued before the distance loop, DRAM fetches overlap with computation, effective wait ≈ 100–200 ns total. Prefetch trades instruction overhead for overlapped memory latency — only profitable when that latency is large enough to justify the trade.
+
 See [`docs/search_optimizations.md`](docs/search_optimizations.md) for the full optimization log with before/after results for each step.
 
 ## Key features
