@@ -99,7 +99,7 @@ DistanceCompute* DistanceCompute::create_scalar(Metric metric) {
 
 // Default factory — returns scalar implementation on generic builds only.
 // On ARM, distance_neon.cpp overrides this with a NEON-accelerated version.
-// On x86, distance_dispatch.cpp overrides this with a runtime cpuid dispatch.
+// On x86, distance_avx2.cpp overrides this with an AVX2-accelerated version.
 #if !defined(VECTORDB_ARCH_ARM) && !defined(VECTORDB_ARCH_X86)
 DistanceCompute* DistanceCompute::create(Metric metric) {
     switch (metric) {

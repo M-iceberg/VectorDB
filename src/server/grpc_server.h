@@ -1,27 +1,22 @@
 // -----------------------------------------------------------------------------
-// grpc_server.h — gRPC service implementation  (Optional / Phase 1.5)
+// grpc_server.h — gRPC service implementation (Phase 1.5, not yet wired up)
 //
 // Wraps Engine and exposes it as a gRPC service defined in proto/vectordb.proto.
-// Not compiled in Phase 1 MVP — requires protobuf + gRPC dependencies.
+// Requires protobuf + gRPC dependencies; not compiled in the current build.
 //
 // When implemented, GrpcServer will:
 //   - Accept connections on a configurable port
 //   - Translate each RPC into an Engine method call
-//   - Stream SearchResponse results back to the client
 //   - Map C++ exceptions to gRPC status codes
 // -----------------------------------------------------------------------------
 #pragma once
-// gRPC service implementation — added Phase 1.5 / Optional.
-// Requires protobuf + gRPC dependencies; not compiled in Phase 1 MVP.
-// See proto/vectordb.proto for the service definition.
 
-namespace vectordb {
-class Engine;
-}
+namespace vectordb { class Engine; }
 
 namespace vectordb {
 
-// TODO Optional: GrpcServer wraps Engine and exposes it over gRPC.
-//               Implement after Python SDK is working (Day 21+).
+// GrpcServer wraps Engine and exposes it over the gRPC service defined in
+// proto/vectordb.proto. See docs/api.md for the full interface specification.
+class GrpcServer;
 
 }  // namespace vectordb

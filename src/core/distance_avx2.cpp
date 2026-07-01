@@ -33,10 +33,10 @@
 // Each function processes 8 floats per iteration, then falls back to a scalar
 // tail loop for the remaining dim % 8 elements.
 //
-// create_avx2() is defined here and declared in distance.h so that
-// distance_dispatch.cpp and unit tests can access AVX2 impls directly.
-// DistanceCompute::create() is defined in distance_dispatch.cpp, which
-// selects AVX2 or scalar at runtime via __builtin_cpu_supports("avx2").
+// create_avx2() is defined here and declared in distance.h.
+// DistanceCompute::create() is defined at the bottom of this file and
+// returns the AVX2 implementation unconditionally (compile-time dispatch
+// via CMake VECTORDB_ARCH detection, not runtime cpuid).
 // -----------------------------------------------------------------------------
 #include "distance.h"
 

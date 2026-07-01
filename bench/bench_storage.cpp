@@ -1,8 +1,7 @@
-// Storage benchmark: WAL throughput, mmap read latency — added Week 6.
+// Storage microbenchmarks via Google Benchmark.
+// WAL throughput and recovery time measurements are in bench/bench_recovery.py.
 #include <benchmark/benchmark.h>
 #include "storage/wal.h"
 #include "storage/vector_file.h"
-
-// TODO Day 28: BM_WalAppend, BM_VectorFileRead
 
 BENCHMARK_MAIN();

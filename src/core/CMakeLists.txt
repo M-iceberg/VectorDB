@@ -9,8 +9,7 @@ elseif(VECTORDB_ARCH STREQUAL "x86")
     list(APPEND CORE_SOURCES distance_avx2.cpp)  # Day 4
 endif()
 
-list(APPEND CORE_SOURCES hnsw_index.cpp)   # Day 6 — HNSW insert/search/remove
-# arena_allocator.cpp added Day 13
+list(APPEND CORE_SOURCES hnsw_index.cpp)
 
 add_library(vortex_core STATIC ${CORE_SOURCES})
 target_include_directories(vortex_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
