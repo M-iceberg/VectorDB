@@ -1,12 +1,12 @@
 """
-Head-to-head: VectorDB vs hnswlib on SIFT-1M.
+Head-to-head: VectorDB vs hnswlib vs faiss on SIFT-1M.
 
-Runs both on the same machine with identical M / ef_construction parameters,
+Runs all on the same machine with identical M / ef_construction parameters,
 sweeps ef_search, and plots the QPS vs Recall@10 trade-off curve — the same
 metric used by ann-benchmarks.com.
 
 Requirements:
-    pip install hnswlib h5py matplotlib
+    pip install hnswlib faiss-cpu h5py matplotlib
 
 Usage:
     python bench/bench_ann_compare.py [--data data/sift-128-euclidean.hdf5]
@@ -28,8 +28,14 @@ try:
     HAS_HNSWLIB = True
 except ImportError:
     HAS_HNSWLIB = False
-    print("hnswlib not installed — only VectorDB results will be shown.")
-    print("  pip install hnswlib\n")
+    print("hnswlib not installed — skipping hnswlib.  pip install hnswlib\n")
+
+try:
+    import faiss
+    HAS_FAISS = True
+except ImportError:
+    HAS_FAISS = False
+    print("faiss not installed — skipping faiss.  pip install faiss-cpu\n")
 
 try:
     import matplotlib
@@ -83,12 +89,10 @@ def run_vectordb(train, test, gt, ef_values, M, ef_construction, out_dir):
     rows = []
     Q = len(test)
     for ef in ef_values:
-        returned = []
         t0 = time.perf_counter()
-        for q in test:
-            res = db.search("sift", query=q, top_k=10, ef_search=ef)
-            returned.append([int(r["id"]) for r in res])
+        batch = db.search_batch("sift", queries=test, top_k=10, ef_search=ef)
         elapsed = time.perf_counter() - t0
+        returned = [[int(r["id"]) for r in row] for row in batch]
         qps = Q / elapsed
         rec = recall_at_10(returned, gt)
         rows.append((ef, qps, rec))
@@ -131,6 +135,39 @@ def run_hnswlib(train, test, gt, ef_values, M, ef_construction):
 
 
 # ---------------------------------------------------------------------------
+# faiss (IndexHNSWFlat, L2)
+# ---------------------------------------------------------------------------
+
+def run_faiss(train, test, gt, ef_values, M, ef_construction):
+    if not HAS_FAISS:
+        return None, []
+
+    N, dim = train.shape
+    print("  [faiss]    building index ...")
+    index = faiss.IndexHNSWFlat(dim, M)
+    index.hnsw.efConstruction = ef_construction
+
+    t0 = time.perf_counter()
+    index.add(train)
+    build_sec = time.perf_counter() - t0
+    print(f"  [faiss]    build: {build_sec:.1f}s  ({N/build_sec:,.0f} vec/s)")
+
+    rows = []
+    Q = len(test)
+    for ef in ef_values:
+        index.hnsw.efSearch = ef
+        t0 = time.perf_counter()
+        _, labels = index.search(test, 10)
+        elapsed = time.perf_counter() - t0
+        qps = Q / elapsed
+        rec = recall_at_10(labels.tolist(), gt)
+        rows.append((ef, qps, rec))
+        print(f"  [faiss]    ef={ef:>4}  QPS={qps:>7,.0f}  Recall@10={rec:.4f}")
+
+    return build_sec, rows
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -161,28 +198,35 @@ def main():
     hnsw_build, hnsw_rows = run_hnswlib(
         train, test, gt, EF_VALUES, args.M, args.ef_construction)
 
+    print()
+    faiss_build, faiss_rows = run_faiss(
+        train, test, gt, EF_VALUES, args.M, args.ef_construction)
+
     # ------------------------------------------------------------------
     # Summary table
     # ------------------------------------------------------------------
     print()
-    print(f"{'ef':>5}  {'VectorDB QPS':>14}  {'VectorDB R@10':>14}  "
-          f"{'hnswlib QPS':>13}  {'hnswlib R@10':>13}  {'QPS ratio':>10}")
-    print("-" * 80)
+    header = f"{'ef':>5}  {'VectorDB':>10} {'R@10':>6}  {'hnswlib':>10} {'R@10':>6}  {'faiss':>10} {'R@10':>6}"
+    print(header)
+    print("-" * len(header))
     for i, (ef, vqps, vrec) in enumerate(vdb_rows):
+        hpart = ""
         if hnsw_rows and i < len(hnsw_rows):
             _, hqps, hrec = hnsw_rows[i]
-            ratio = f"{hqps/vqps:.1f}x"
-            print(f"{ef:>5}  {vqps:>14,.0f}  {vrec:>14.4f}  "
-                  f"{hqps:>13,.0f}  {hrec:>13.4f}  {ratio:>10}")
-        else:
-            print(f"{ef:>5}  {vqps:>14,.0f}  {vrec:>14.4f}")
+            hpart = f"  {hqps:>10,.0f} {hrec:>6.4f}"
+        fpart = ""
+        if faiss_rows and i < len(faiss_rows):
+            _, fqps, frec = faiss_rows[i]
+            fpart = f"  {fqps:>10,.0f} {frec:>6.4f}"
+        print(f"{ef:>5}  {vqps:>10,.0f} {vrec:>6.4f}{hpart}{fpart}")
 
     print()
-    print(f"Build time — VectorDB: {vdb_build:.1f}s", end="")
+    parts = [f"VectorDB: {vdb_build:.1f}s"]
     if hnsw_rows:
-        print(f"  hnswlib: {hnsw_build:.1f}s  (ratio: {vdb_build/hnsw_build:.1f}x slower)")
-    else:
-        print()
+        parts.append(f"hnswlib: {hnsw_build:.1f}s")
+    if faiss_rows:
+        parts.append(f"faiss: {faiss_build:.1f}s")
+    print("Build — " + "  ".join(parts))
 
     # ------------------------------------------------------------------
     # Plot: QPS vs Recall@10 (ann-benchmarks style)
@@ -192,12 +236,17 @@ def main():
 
         v_recs = [r for _, _, r in vdb_rows]
         v_qps  = [q for _, q, _ in vdb_rows]
-        ax.plot(v_recs, v_qps, "o-", color="tab:blue",  label="VectorDB (Python SDK)")
+        ax.plot(v_recs, v_qps, "o-", color="tab:blue", label="VectorDB")
 
         if hnsw_rows:
             h_recs = [r for _, _, r in hnsw_rows]
             h_qps  = [q for _, q, _ in hnsw_rows]
-            ax.plot(h_recs, h_qps, "s-", color="tab:orange", label="hnswlib (Python)")
+            ax.plot(h_recs, h_qps, "s-", color="tab:orange", label="hnswlib")
+
+        if faiss_rows:
+            f_recs = [r for _, _, r in faiss_rows]
+            f_qps  = [q for _, q, _ in faiss_rows]
+            ax.plot(f_recs, f_qps, "^-", color="tab:green", label="faiss")
 
         for ef, qps, rec in vdb_rows:
             ax.annotate(f"ef={ef}", (rec, qps),
@@ -208,6 +257,11 @@ def main():
                 ax.annotate(f"ef={ef}", (rec, qps),
                             textcoords="offset points", xytext=(4, -12),
                             fontsize=7, color="tab:orange")
+        if faiss_rows:
+            for ef, qps, rec in faiss_rows:
+                ax.annotate(f"ef={ef}", (rec, qps),
+                            textcoords="offset points", xytext=(-30, 4),
+                            fontsize=7, color="tab:green")
 
         ax.set_xlabel("Recall@10")
         ax.set_ylabel("QPS")
