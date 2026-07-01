@@ -1,4 +1,4 @@
-# VortexDB
+# VectorDB
 
 A vector database built from scratch in C++ and Python. Built to understand how production systems like Pinecone, Weaviate, and Qdrant work under the hood.
 
@@ -11,44 +11,46 @@ A vector database built from scratch in C++ and Python. Built to understand how 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     Python SDK (client.py)               │
-│  open() · insert() · search() · remove() · checkpoint() │
-└───────────────────────┬─────────────────────────────────┘
-                        │ pybind11
-┌───────────────────────▼─────────────────────────────────┐
-│                    Engine  (server/engine.h)              │
-│  shared_mutex — search holds read lock, writes exclusive │
-│                                                          │
-│  INSERT path:                                            │
-│    1. append WAL record + fdatasync()  (crash safety)    │
-│    2. insert into HnswIndex            (memory)          │
-│    3. write vector to VectorFile       (mmap, O(1))      │
-│    4. update MetadataIndex             (memory)          │
-│                                                          │
-│  SEARCH path:                                            │
-│    1. HNSW beam search  (ef_search candidates)           │
-│    2. post-filter by metadata allowlist                  │
-│    3. return top-k sorted by distance                    │
-│                                                          │
-│  RECOVERY path (startup):                                │
-│    1. load graph.bin + metadata.bin  (last checkpoint)   │
-│    2. replay WAL records since checkpoint LSN            │
-└──────┬──────────┬────────────┬───────────────┬──────────┘
-       │          │            │               │
-  ┌────▼───┐ ┌───▼────┐ ┌─────▼──────┐ ┌─────▼──────────┐
-  │HnswIndex│ │VectorFile│ │    WAL     │ │ MetadataIndex  │
-  │         │ │          │ │            │ │                │
-  │ HNSW    │ │mmap flat │ │ append-    │ │ inverted index │
-  │ graph   │ │ float32  │ │ only log   │ │ (string eq)    │
-  │ + SIMD  │ │ array    │ │ fdatasync  │ │ + sorted array │
-  │ distance│ │          │ │            │ │ (numeric range)│
-  └────┬────┘ └────┬─────┘ └─────┬──────┘ └──────┬────────┘
-       │(checkpoint)│             │                │(checkpoint)
-  ┌────▼────────────▼─────────────▼────────────────▼────────┐
-  │                      Disk                                │
-  │  graph.bin  vectors.vdb  wal.log  metadata.bin           │
-  └──────────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                        Python SDK                               │
+  │         open()  insert()  search()  remove()  checkpoint()      │
+  └──────────────────────────┬──────────────────────────────────────┘
+                             │ pybind11  (zero-copy numpy float32)
+  ┌──────────────────────────▼──────────────────────────────────────┐
+  │                          Engine                                 │
+  │              shared_mutex: readers concurrent, writes exclusive  │
+  │                                                                  │
+  │   insert()  ─────────────────────────────────────────────────►  │
+  │     │  1 ▸ WAL append + fdatasync()          [crash safety]      │
+  │     │  2 ▸ HnswIndex.insert()                [memory, O(log N)]  │
+  │     │  3 ▸ VectorFile.write()                [mmap, O(1)]        │
+  │     └  4 ▸ MetadataIndex.insert()            [memory, O(1)]      │
+  │                                                                  │
+  │   search()  ─────────────────────────────────────────────────►  │
+  │     │  1 ▸ HNSW beam search (ef_search candidates)              │
+  │     │  2 ▸ post-filter by metadata allowlist                     │
+  │     └  3 ▸ return top-k sorted by distance                      │
+  │                                                                  │
+  │   Engine()  [startup — crash recovery]  ──────────────────────► │
+  │     │  1 ▸ deserialize graph.bin + metadata.bin                  │
+  │     └  2 ▸ replay WAL records since last checkpoint LSN          │
+  └───────┬──────────────┬──────────────┬──────────────┬────────────┘
+          │              │              │              │
+  ┌───────▼──────┐ ┌─────▼──────┐ ┌────▼─────┐ ┌─────▼────────────┐
+  │  HnswIndex   │ │ VectorFile │ │   WAL    │ │  MetadataIndex   │
+  │              │ │            │ │          │ │                  │
+  │  multi-layer │ │ mmap flat  │ │ append-  │ │ inverted index   │
+  │  proximity   │ │ float32    │ │ only log │ │ (string eq)      │
+  │  graph       │ │ array      │ │ fdatasync│ │ sorted array     │
+  │  AVX2 / NEON │ │ O(1) write │ │ per op   │ │ (numeric range)  │
+  └───────┬──────┘ └─────┬──────┘ └────┬─────┘ └─────┬────────────┘
+          │  checkpoint   │             │  checkpoint   │
+          └───────────────┴──────┬──────┴───────────────┘
+                                 │
+  ┌──────────────────────────────▼──────────────────────────────────┐
+  │                            Disk                                 │
+  │         graph.bin    vectors.vdb    wal.log    metadata.bin      │
+  └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key design decisions
