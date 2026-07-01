@@ -285,7 +285,16 @@ x86 CI is ~60% slower than macOS at N=8K. The virtualized AMD EPYC runner has lo
 
 **PASS on both platforms** — no crashes, no data loss.
 
-x86 CI runs 4.3× faster than macOS for this workload. The stress test uses dim=16: AVX2 computes 16-float L2 distance in 2 SIMD instructions (8 floats/op), while NEON needs 4 (4 floats/op). The 2× SIMD advantage at dim=16, combined with faster x86 integer branch throughput for graph traversal, explains most of the gap.
+The table can be misleading because the two runs have different durations. What matters is throughput per second:
+
+| | macOS (ARM) | x86 CI (AMD EPYC) |
+|-|------------:|------------------:|
+| Inserts/sec | 73,500 / 600s = **122/s** | 47,000 / 60s = **783/s** |
+| ops/s | ~290 | ~1,252 |
+
+CI is **6.4× faster per second** for inserts. macOS accumulated more total operations only because it ran 10× longer.
+
+The gap is largest at dim=16 (what the stress test uses): AVX2 processes 8 floats/cycle so a 16-float L2 distance takes 2 SIMD instructions; NEON processes 4 floats/cycle so the same distance takes 4 instructions — a 2× SIMD advantage before any other factors. At dim=128 (SIFT-1M), the two platforms are much closer (~1.5× apart), because the SIMD advantage is the same but graph traversal overhead is a larger fraction of total time and is similar on both architectures.
 
 ---
 
