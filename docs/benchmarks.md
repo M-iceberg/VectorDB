@@ -320,3 +320,29 @@ The gap is largest at dim=16 (what the stress test uses): AVX2 processes 8 float
 **Finding 2 — Recall collapses at low selectivity.** The HNSW graph is built for unfiltered similarity. At 1% selectivity only 100 vectors are eligible. With ef=100, beam search explores ~100 candidates, but most are rejected by the filter — the effective candidate pool for the filtered result is far smaller than ef. Some true nearest neighbors in the eligible set are never reached because they are poorly connected in the graph (the graph was built ignoring the filter).
 
 This is the fundamental tension in filtered ANN: **the graph is optimized for global proximity, not per-filter proximity.** Production systems (Weaviate, Qdrant, Pinecone) address this with dedicated per-segment indexes or hybrid HNSW+inverted-index structures. For selectivity > 10%, post-filtering on top of unfiltered ANN works well; below 1%, recall degrades significantly without per-filter graph construction.
+
+---
+
+## ann-benchmarks Comparison — VectorDB vs hnswlib (SIFT-1M)
+
+**Methodology:** ann-benchmarks style — same machine, same dataset, same parameters. Both use M=16, ef_construction=200, SIFT-1M (1M vectors, 10K queries, dim=128, L2). Primary metric: Recall@10 (fraction of true top-10 neighbors returned). Script: `bench/bench_ann_compare.py`.
+
+**Hardware:** Apple Silicon (ARM NEON), macOS.
+
+| ef | VectorDB QPS | VectorDB R@10 | hnswlib QPS | hnswlib R@10 | QPS ratio |
+|---:|-------------:|--------------:|------------:|-------------:|----------:|
+|  50 | 10,319 | 0.9556 | 83,615 | 0.9462 | 8.1× |
+| 100 |  6,572 | 0.9865 | 49,979 | 0.9828 | 7.6× |
+| 200 |  3,905 | 0.9967 | 27,854 | 0.9957 | 7.1× |
+| 400 |  2,236 | 0.9989 | 15,573 | 0.9987 | 7.0× |
+| 800 |  1,264 | 0.9993 |  8,707 | 0.9992 | 6.9× |
+
+Build time: VectorDB **4,285 s** vs hnswlib **31 s** (136× slower).
+
+### Findings
+
+**1. Recall is nearly identical.** At every ef value, VectorDB and hnswlib return essentially the same set of neighbors. At ef=50, VectorDB is actually slightly better (0.9556 vs 0.9462). This validates the HNSW graph construction and search implementation — the algorithm is correct.
+
+**2. QPS gap is ~7×.** The gap is real but partially a methodology artifact: hnswlib's Python binding uses a batched `knn_query(all_10K_queries)` call that parallelizes across threads; VectorDB queries sequentially one at a time. The underlying C++ search speed (seen in `bench_profile`) is within 2–3× of hnswlib on an equivalent single-threaded comparison. The remaining gap comes from Python pybind11 call overhead per query and hnswlib's tighter inline node memory layout (neighbors packed alongside vector data in the same allocation, avoiding a second pointer dereference).
+
+**3. Build time gap is 136×.** VectorDB calls `fdatasync()` after every insert — 1M syscalls for 1M vectors. hnswlib builds purely in memory with no persistence layer. This is the cost of WAL durability: VectorDB survives a crash mid-insert; hnswlib does not. The trade-off is intentional.
