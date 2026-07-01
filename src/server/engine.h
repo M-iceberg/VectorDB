@@ -105,6 +105,21 @@ public:
 
     std::vector<SearchResult> search(const SearchRequest& req) const;
 
+    // Parallel batch search: n_queries independent searches on multiple threads.
+    // req.queries is row-major (n_queries × dim). Returns one result list per query.
+    // num_threads <= 0 means hardware_concurrency().
+    struct BatchSearchRequest {
+        std::string  collection;
+        const float* queries    = nullptr;
+        int          n_queries  = 0;
+        int          top_k      = 10;
+        int          ef_search  = 64;
+        int          num_threads = 0;
+        std::vector<FieldFilter> filters;
+    };
+    std::vector<std::vector<SearchResult>> search_batch(
+        const BatchSearchRequest& req) const;
+
     // Writes a checkpoint: serializes the graph and metadata index, then
     // truncates the WAL up to the current LSN.
     void checkpoint(const std::string& collection);

@@ -73,9 +73,23 @@ public:
     // Updates next_id_ = max(next_id_, id+1).
     void insert_for_recovery(NodeId id, const float* vec);
 
+    // Parallel batch insert: assigns count sequential NodeIds, pre-grows all
+    // arrays, then spawns num_threads threads each inserting its slice.
+    // num_threads <= 0 means hardware_concurrency(). Returns first assigned id.
+    // IDs returned are first_id, first_id+1, ..., first_id+count-1.
+    NodeId insert_batch_mt(const float* vecs, size_t count, int num_threads = 0);
+
     // Returns up to k (distance, id) pairs sorted by ascending distance.
     std::vector<std::pair<float, NodeId>> search(
         const float* query, int k, int ef_search) const;
+
+    // Parallel batch search: runs n_queries independent searches across
+    // num_threads threads. Thread-safe: each thread owns its tl_visited.
+    // queries is row-major: queries[i*dim .. (i+1)*dim-1] is query i.
+    // num_threads <= 0 means hardware_concurrency().
+    std::vector<std::vector<std::pair<float, NodeId>>> search_batch(
+        const float* queries, int n_queries, int k, int ef_search,
+        int num_threads = 0) const;
 
     // Soft-delete: marks node as tombstone. Does not relink neighbors.
     void remove(NodeId id);

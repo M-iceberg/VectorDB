@@ -211,7 +211,50 @@ PYBIND11_MODULE(_vectordb, m) {
             py::arg("top_k") = 10, py::arg("ef_search") = 64,
             py::arg("filters") = py::none())
 
-        .def("checkpoint", &Engine::checkpoint, py::arg("collection"));
+        .def("checkpoint", &Engine::checkpoint, py::arg("collection"))
+
+        // Batch search: run n_queries in parallel.
+        // queries: 2-D float32 numpy array (n_queries × dim).
+        // Returns a list of n_queries result lists, each sorted by distance.
+        .def("search_batch",
+            [](Engine& self, const std::string& collection,
+               py::array_t<float, py::array::c_style | py::array::forcecast> queries,
+               int top_k, int ef_search, int num_threads, py::object filters) {
+                auto buf = queries.request();
+                if (buf.ndim != 2)
+                    throw std::invalid_argument("queries must be 2-D");
+                int n_queries = static_cast<int>(buf.shape[0]);
+                const float* ptr = static_cast<const float*>(buf.ptr);
+
+                Engine::BatchSearchRequest req;
+                req.collection  = collection;
+                req.queries     = ptr;
+                req.n_queries   = n_queries;
+                req.top_k       = top_k;
+                req.ef_search   = ef_search;
+                req.num_threads = num_threads;
+                if (!filters.is_none())
+                    req.filters = parse_filters(filters.cast<py::dict>());
+
+                auto batch = self.search_batch(req);
+
+                py::list out;
+                for (auto& results : batch) {
+                    py::list row;
+                    for (auto& r : results) {
+                        py::dict d;
+                        d["user_id"]  = r.user_id;
+                        d["distance"] = r.distance;
+                        row.append(d);
+                    }
+                    out.append(row);
+                }
+                return out;
+            },
+            py::arg("collection"), py::arg("queries"),
+            py::arg("top_k") = 10, py::arg("ef_search") = 64,
+            py::arg("num_threads") = 0,
+            py::arg("filters") = py::none());
 
     m.def("open", [](const std::string& data_dir) {
         return std::make_unique<Engine>(data_dir);

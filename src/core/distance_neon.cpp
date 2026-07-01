@@ -48,24 +48,40 @@ namespace {
 // ----------------------------------------------------------------------------
 class NeonL2 final : public DistanceCompute {
 public:
-    // a and b each have `dim` elements. For each position i, compute (a[i]-b[i])^2
-    // and sum them all up. NEON processes 4 positions per iteration instead of 1:
-    //   Scalar: 8 iterations for dim=8, each handling a[i]-b[i] for one element.
-    //   NEON:   2 iterations for dim=8, each handling [a[i..i+3]]-[b[i..i+3]] in parallel.
+    // 4-accumulator unrolled NEON L2.
+    //
+    // Why 4 accumulators: a single vmlaq_f32 has ~3 cycle latency on Apple M-series.
+    // With one accumulator every iteration depends on the previous result —
+    // throughput is capped at 1 iteration per 3 cycles.  With 4 independent
+    // accumulators the CPU's 4 NEON execution units can issue one FMA per cycle
+    // to each lane, reaching ~4× the throughput for the same instruction count.
+    // Each outer iteration handles 16 floats (4 groups × 4 lanes) so dim=128
+    // completes in 8 outer iterations instead of 32.
     float compute(const float* a, const float* b, size_t dim) const override {
-        float32x4_t vsum = vdupq_n_f32(0.0f);
+        float32x4_t s0 = vdupq_n_f32(0.0f);
+        float32x4_t s1 = vdupq_n_f32(0.0f);
+        float32x4_t s2 = vdupq_n_f32(0.0f);
+        float32x4_t s3 = vdupq_n_f32(0.0f);
         size_t i = 0;
+        for (; i + 16 <= dim; i += 16) {
+            float32x4_t d0 = vsubq_f32(vld1q_f32(a+i),    vld1q_f32(b+i));
+            float32x4_t d1 = vsubq_f32(vld1q_f32(a+i+4),  vld1q_f32(b+i+4));
+            float32x4_t d2 = vsubq_f32(vld1q_f32(a+i+8),  vld1q_f32(b+i+8));
+            float32x4_t d3 = vsubq_f32(vld1q_f32(a+i+12), vld1q_f32(b+i+12));
+            s0 = vmlaq_f32(s0, d0, d0);
+            s1 = vmlaq_f32(s1, d1, d1);
+            s2 = vmlaq_f32(s2, d2, d2);
+            s3 = vmlaq_f32(s3, d3, d3);
+        }
+        // reduce 4 accumulators
+        float32x4_t vsum = vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3));
+        // 4-float tail (covers dim % 16 remaining)
         for (; i + 4 <= dim; i += 4) {
-            float32x4_t va   = vld1q_f32(a + i);
-            float32x4_t vb   = vld1q_f32(b + i);
-            float32x4_t diff = vsubq_f32(va, vb);
-            vsum = vmlaq_f32(vsum, diff, diff);  // vsum += diff * diff
+            float32x4_t d = vsubq_f32(vld1q_f32(a+i), vld1q_f32(b+i));
+            vsum = vmlaq_f32(vsum, d, d);
         }
-        float result = vaddvq_f32(vsum);  // horizontal sum of 4 lanes
-        for (; i < dim; ++i) {            // scalar tail
-            float d = a[i] - b[i];
-            result += d * d;
-        }
+        float result = vaddvq_f32(vsum);
+        for (; i < dim; ++i) { float d = a[i]-b[i]; result += d*d; }
         return result;
     }
 };

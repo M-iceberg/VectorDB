@@ -82,6 +82,22 @@ class VectorDB:
     # ------------------------------------------------------------------
     # Search — returns user_id strings
     # ------------------------------------------------------------------
+    def search_batch(self, collection: str, *, queries,
+                     top_k: int = 10, ef_search: int = 64,
+                     num_threads: int = 0,
+                     filters: Optional[Dict] = None) -> List[List[Dict]]:
+        """Parallel batch search. queries is a 2-D float32 array (N × dim).
+        Returns a list of N result lists, each sorted by ascending distance.
+        num_threads=0 means hardware_concurrency()."""
+        queries = np.asarray(queries, dtype=np.float32)
+        if queries.ndim == 1:
+            queries = queries[np.newaxis, :]
+        batch = self._engine.search_batch(
+            collection, queries, top_k=top_k, ef_search=ef_search,
+            num_threads=num_threads, filters=filters)
+        return [[{"id": r["user_id"], "distance": r["distance"]} for r in row]
+                for row in batch]
+
     def search(self, collection: str, *, query, top_k: int = 10,
                ef_search: int = 64,
                filters: Optional[Dict] = None) -> List[Dict]:

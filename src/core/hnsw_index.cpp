@@ -42,14 +42,45 @@
 // -----------------------------------------------------------------------------
 #include "hnsw_index.h"
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <mutex>
 #include <queue>
 #include <random>
 #include <stdexcept>
+#include <thread>
 
 namespace vectordb {
+
+// ---------------------------------------------------------------------------
+// Thread-local visited table — generation counter eliminates memset per call.
+//
+// Previously: std::vector<uint8_t> visited(max_node_id_+1, 0) allocated and
+// zero-initialised on every search_layer call. At N=1M this was 1 MB of
+// zeroing ~2 times per insert, totalling ~2 TB of memset across a 1M build.
+//
+// Now: each thread owns a stamps[] array and a uint32_t generation counter.
+// Marking a node visited = stamps[id] = gen (one store). Checking = stamps[id]==gen
+// (one load). "Resetting" = ++gen (one add). No memset, no heap allocation
+// after the first call on a thread. On gen overflow (2^32 calls) we do one
+// full reset — negligible amortised cost.
+// ---------------------------------------------------------------------------
+struct VisitedTable {
+    std::vector<uint32_t> stamps;
+    uint32_t gen = 0;
+
+    uint32_t acquire(size_t needed) {
+        if (stamps.size() < needed) stamps.resize(needed, 0);
+        if (++gen == 0) {
+            std::fill(stamps.begin(), stamps.end(), 0);
+            gen = 1;
+        }
+        return gen;
+    }
+};
+thread_local VisitedTable tl_visited;
 
 // ---------------------------------------------------------------------------
 // Impl — private state
@@ -60,13 +91,12 @@ struct HnswIndex::Impl {
     std::unique_ptr<DistanceCompute> dc;
 
     // Graph structure: flat array indexed by NodeId.
-    // nodes_flat_[id] is valid when node.id != kInvalidNode (default-constructed nodes are invalid).
-    // Direct array access eliminates the hash lookup in the search_layer hot path.
+    // nodes_flat_[id] is valid when node.id != kInvalidNode.
     std::vector<HnswNode> nodes_flat_;
 
     void grow_nodes(NodeId id) {
         if (id >= nodes_flat_.size())
-            nodes_flat_.resize(id + 1);  // default-constructs with id = kInvalidNode
+            nodes_flat_.resize(id + 1);
     }
     bool node_exists(NodeId id) const {
         return id < nodes_flat_.size() && nodes_flat_[id].id != kInvalidNode;
@@ -76,18 +106,12 @@ struct HnswIndex::Impl {
     // (cfg.M0 + cfg.dim) uint32_t elements, laid out as:
     //   [adj0 neighbors: cfg.M0 × NodeId] [vector data: cfg.dim × float]
     //
-    // Collocating adj0 and vec in one array means a single prefetch of node n's
-    // block warms up both its neighbor list (needed when n becomes a candidate)
-    // and its vector (needed for dist_q). With separate adj0_ and vecs_flat_,
-    // accessing neighbor n required two separate random-access trips into two
-    // different memory regions; the hardware prefetcher could not predict either.
+    // Collocating adj0 and vec in one array means a prefetch of node n's block
+    // warms both its neighbor list (for when n becomes a candidate) and its
+    // vector (for dist_q). With separate arrays the two accesses were unrelated
+    // random-access patterns the hardware prefetcher could not predict.
     //
-    // node_stride_ = cfg.M0 + cfg.dim  (in uint32_t units; sizeof(NodeId)==sizeof(float)==4)
-    // adj0_ptr(id) = &node_blocks_[id * node_stride_]              → NodeId[cfg.M0]
-    // vec_ptr(id)  = (float*)&node_blocks_[id * node_stride_ + M0] → float[cfg.dim]
-    //
-    // adj0_count_[id] = number of valid layer-0 neighbors for node id (≤ cfg.M0).
-    // Upper-layer neighbors (layer ≥ 1) remain in nodes_flat_[id].neighbors[layer].
+    // node_stride_ = cfg.M0 + cfg.dim  (uint32_t units; sizeof(NodeId)==sizeof(float)==4)
     size_t                node_stride_ = 0;
     std::vector<uint32_t> node_blocks_;
     std::vector<uint8_t>  adj0_count_;
@@ -104,29 +128,34 @@ struct HnswIndex::Impl {
 
     NodeId*       adj0_ptr(NodeId id)       { return reinterpret_cast<NodeId*>(node_blocks_.data() + (size_t)id * node_stride_); }
     const NodeId* adj0_ptr(NodeId id) const { return reinterpret_cast<const NodeId*>(node_blocks_.data() + (size_t)id * node_stride_); }
-
-    // Vector data is stored at offset cfg.M0 within each node's block.
-    // sizeof(NodeId) == sizeof(float) == sizeof(uint32_t) == 4, so the reinterpret_cast is safe.
-
-    NodeId entry_point  = kInvalidNode;
-    int    max_layer    = -1;
-    size_t live_count   = 0;
-    NodeId max_node_id_ = 0;  // largest NodeId ever inserted; sizes visited array in search_layer
-    NodeId next_id_     = 0;  // next auto-assigned NodeId for insert()
-
-    float*       vec_ptr(NodeId id)       { return reinterpret_cast<float*>(node_blocks_.data() + (size_t)id * node_stride_ + cfg.M0); }
-    const float* vec_ptr(NodeId id) const { return reinterpret_cast<const float*>(node_blocks_.data() + (size_t)id * node_stride_ + cfg.M0); }
+    float*        vec_ptr(NodeId id)        { return reinterpret_cast<float*>(node_blocks_.data() + (size_t)id * node_stride_ + cfg.M0); }
+    const float*  vec_ptr(NodeId id) const  { return reinterpret_cast<const float*>(node_blocks_.data() + (size_t)id * node_stride_ + cfg.M0); }
 
     void store_vec(NodeId id, const float* vec) {
         grow_node_block(id);
         std::memcpy(vec_ptr(id), vec, cfg.dim * sizeof(float));
     }
 
-    std::mt19937 rng{42};  // Mersenne Twister random number generator for layer assignment; fixed seed for reproducibility
-    double ml;  // 1 / ln(M) — controls layer assignment probability; larger M → smaller ml → fewer high-layer nodes
+    // Global graph state — atomic so multi-threaded insert can read/update safely.
+    // On single-threaded paths load()/store() with relaxed ordering is sufficient.
+    std::atomic<NodeId> entry_point_{kInvalidNode};
+    std::atomic<int>    max_layer_{-1};
+    std::atomic<size_t> live_count_{0};
+    std::atomic<NodeId> next_id_{0};
+    NodeId max_node_id_ = 0;
 
-    // constructor ：Initializes config, selects the distance compute implementation for the given metric,
-    // and precomputes ml. All other fields (nodes, vecs, entry_point, etc.) use their inline defaults.
+    // Per-node lock striping for neighbor list modification during parallel insert.
+    // 256 stripes: false-sharing rate ~0.4% for random NodeIds, no resize issues
+    // (std::mutex is not movable, so std::array avoids the vector-resize problem).
+    static constexpr size_t kStripes = 256;
+    mutable std::array<std::mutex, kStripes> stripe_locks_;
+    mutable std::mutex entry_mu_;
+
+    std::mutex& stripe_lock(NodeId id) const { return stripe_locks_[id % kStripes]; }
+
+    std::mt19937 rng{42};
+    double ml;
+
     explicit Impl(HnswConfig c)
         : cfg(c)
         , dc(DistanceCompute::create(c.metric))
@@ -134,68 +163,54 @@ struct HnswIndex::Impl {
         , ml(1.0 / std::log(static_cast<double>(c.M)))
     {}
 
-    // Distance between two stored nodes.
     float dist(NodeId a, NodeId b) const {
         return dc->compute(vec_ptr(a), vec_ptr(b), cfg.dim);
     }
-
-    // Distance from an external query vector to a stored node.
     float dist_q(const float* query, NodeId b) const {
         return dc->compute(query, vec_ptr(b), cfg.dim);
     }
 
-    // Sample a random layer using the exponential distribution from the paper.
-    // ml = 1/ln(M) ensures the expected number of nodes at layer l is M^(-l).
     int assign_layer() {
         std::uniform_real_distribution<double> u(0.0, 1.0);
         return static_cast<int>(-std::log(u(rng)) * ml);
     }
 
-    // Beam search at a single layer starting from entry point `ep`.
-    // query: pointer to the first element of the query float array (length = cfg.dim).
-    //        float* is used instead of vector<float> so callers can pass data from
-    //        any source (array, vector, mmap) without copying.
-    // returns: up to `ef` (distance, node_id) pairs sorted ascending by distance.
-    //          callers use this differently: insert Step 1 takes only [0] as the next
-    //          entry point; insert Step 2 picks M neighbors to connect; search filters
-    //          tombstones and returns the top-k to the user.
+    // Thread-safe layer assignment — uses a thread_local RNG so no lock is needed.
+    int assign_layer_mt() {
+        thread_local std::mt19937 tl_rng{std::random_device{}()};
+        std::uniform_real_distribution<double> u(0.0, 1.0);
+        return static_cast<int>(-std::log(u(tl_rng)) * ml);
+    }
+
+    // Beam search at a single layer.  Uses the thread_local VisitedTable so:
+    //   (a) no heap allocation per call, (b) safe for concurrent callers (each
+    //       thread has its own table).
     std::vector<std::pair<float, NodeId>> search_layer(
         const float* query, NodeId ep, int ef, int layer) const
     {
-        using DistId = std::pair<float, NodeId>;  // alias for (distance, node_id) pair
-        // W: result set — max-heap so we can evict the worst easily.
+        using DistId = std::pair<float, NodeId>;
         auto cmp_max = [](const DistId& a, const DistId& b) { return a.first < b.first; };
-        // C: candidate set — min-heap so we always explore the closest next.
         auto cmp_min = [](const DistId& a, const DistId& b) { return a.first > b.first; };
-
-        // priority_queue<element type, underlying container, comparator>
-        // vector<DistId> is the underlying storage; must be explicit here because a custom comparator is provided.
         std::priority_queue<DistId, std::vector<DistId>, decltype(cmp_max)> W(cmp_max);
         std::priority_queue<DistId, std::vector<DistId>, decltype(cmp_min)> C(cmp_min);
-        // Flat visited array: O(1) lookup/insert, one allocation vs unordered_set's many.
-        // max_node_id_ + 1 bytes; fits in L2 cache for N <= ~100K (12.5 KB).
-        std::vector<uint8_t> visited(max_node_id_ + 1, 0);
+
+        // Generation-counter visited set — O(1) reset, no memset per call.
+        uint32_t gen = tl_visited.acquire(max_node_id_ + 1);
+        auto&    stamps = tl_visited.stamps;
 
         float ep_dist = dist_q(query, ep);
         W.push({ep_dist, ep});
         C.push({ep_dist, ep});
-        visited[ep] = 1;
+        stamps[ep] = gen;
 
         while (!C.empty()) {
-            // Always expand the closest unexplored candidate first (C is a min-heap).
             auto [candidate_dist, candidate] = C.top(); C.pop();
-
-            // Termination: if the closest candidate in C is already farther than the
-            // worst result in W, no future expansion can improve W — stop early.
             if (candidate_dist > W.top().first) break;
 
-            // Expand: visit each neighbor at this layer.
-            // Layer 0 reads from the flat CSR adj0_ array (one multiply-add, no pointer chase).
-            // Upper layers fall back to the per-node neighbor vector.
             auto expand = [&](NodeId neighbor) {
                 if (neighbor == kInvalidNode) return;
-                if (visited[neighbor]) return;
-                visited[neighbor] = 1;
+                if (neighbor >= stamps.size() || stamps[neighbor] == gen) return;
+                stamps[neighbor] = gen;
 
                 float neighbor_dist = dist_q(query, neighbor);
                 float worst_dist    = W.top().first;
@@ -209,21 +224,27 @@ struct HnswIndex::Impl {
             if (layer == 0) {
                 int cnt = adj0_count_[candidate];
                 const NodeId* nbrs = adj0_ptr(candidate);
-                // Issue prefetches for all neighbor vectors before computing distances.
-                // While dist_q(nbrs[0]) runs, nbrs[1..cnt-1] vectors arrive from memory.
 #ifndef VORTEXDB_NO_PREFETCH
                 for (int k = 0; k < cnt; ++k)
                     __builtin_prefetch(vec_ptr(nbrs[k]), 0, 0);
 #endif
                 for (int k = 0; k < cnt; ++k) expand(nbrs[k]);
             } else {
-                const auto& candidate_nbrs = nodes_flat_[candidate].neighbors;
-                if (layer >= static_cast<int>(candidate_nbrs.size())) continue;
-                for (NodeId neighbor : candidate_nbrs[layer]) expand(neighbor);
+                // Upper-layer neighbor lists are modified by concurrent inserts.
+                // Copy under the stripe lock so we never read a vector mid-assign
+                // or mid-push_back (which changes internal pointers → use-after-free).
+                // Layer-0 (adj0) is a pre-allocated fixed array — no lock needed there.
+                std::vector<NodeId> layer_nbrs;
+                {
+                    std::lock_guard<std::mutex> lk(stripe_lock(candidate));
+                    const auto& cn = nodes_flat_[candidate].neighbors;
+                    if (layer < static_cast<int>(cn.size()))
+                        layer_nbrs = cn[layer];
+                }
+                for (NodeId neighbor : layer_nbrs) expand(neighbor);
             }
         }
 
-        // Drain W into a vector sorted ascending by distance.
         std::vector<DistId> result;
         result.reserve(W.size());
         while (!W.empty()) { result.push_back(W.top()); W.pop(); }
@@ -231,127 +252,78 @@ struct HnswIndex::Impl {
         return result;
     }
 
-    // Algorithm 4 (Malkov & Yashunin 2018): heuristic neighbor selection.
-    //
-    // Simple greedy selection (take the M_max closest) tends to cluster all neighbors
-    // in the same direction — if there are 50 vectors in one dense region and 5 spread
-    // around, greedy fills the list with the dense cluster and misses the spread-out ones.
-    // This hurts recall: searches coming from different directions can't navigate through.
-    //
-    // The heuristic adds a diversity check: a candidate e is admitted only if it is
-    // closer to q than to any already-selected neighbor r. If dist(e, r) < dist(e, q)
-    // for some r, then r already "covers" the direction of e — adding e would be
-    // redundant and waste a slot. This forces selected neighbors to span different
-    // directions in vector space, improving graph connectivity and recall.
-    //
-    // candidates must be sorted ascending by distance to q.
     std::vector<NodeId> select_neighbors(
         const std::vector<std::pair<float, NodeId>>& candidates,
         int M_max) const
     {
         std::vector<NodeId> result;
         result.reserve(M_max);
-
         for (auto& [d_q_e, e] : candidates) {
             if (static_cast<int>(result.size()) >= M_max) break;
-
-            if (!cfg.heuristic) {
-                // Greedy: take the M_max closest, no diversity check.
-                result.push_back(e);
-                continue;
-            }
-
-            // Diversity check: admit e only if no already-selected neighbor r is
-            // closer to e than q is. If r is closer to e than q is, r already
-            // covers e's direction — e would be a redundant neighbor.
+            if (!cfg.heuristic) { result.push_back(e); continue; }
             bool dominated = false;
             for (NodeId r : result) {
-                if (dist(e, r) < d_q_e) {
-                    dominated = true;
-                    break;
-                }
+                if (dist(e, r) < d_q_e) { dominated = true; break; }
             }
             if (!dominated) result.push_back(e);
         }
         return result;
     }
 
-    // Adds a bidirectional edge between u and v at `layer`: both u→v and v→u.
-    // Bidirectional edges are required so the graph stays navigable from any direction.
-    //
-    // If a neighbor list is already full (>= M_max), heuristic pruning is applied:
-    // build a candidate set from (existing neighbors ∪ new node), run select_neighbors
-    // to pick the best M_max diverse subset, and replace the neighbor list.
-    // This keeps each node's neighbor count within M_max while selecting diverse neighbors
-    // rather than just the closest ones.
-    void add_edge(NodeId u, NodeId v, int layer, int M_max) {
+    // Single-direction edge add from→to at layer (no locking, caller is responsible).
+    // Used by: add_edge() (single-threaded), and insert_with_id_mt() where the
+    // caller locks the destination node before calling for reverse edges.
+    void add_directed(NodeId from, NodeId to, int layer, int M_max) {
         if (layer == 0) {
-            auto add_one_flat = [&](NodeId from, NodeId to) {
-                grow_adj0(from);
-                uint8_t& cnt = adj0_count_[from];
-                NodeId*  nbrs = adj0_ptr(from);
-                if (cnt < M_max) {
-                    nbrs[cnt++] = to;
-                } else {
-                    std::vector<std::pair<float, NodeId>> candidates;
-                    candidates.reserve(cnt + 1);
-                    for (int k = 0; k < cnt; ++k)
-                        candidates.push_back({dist(from, nbrs[k]), nbrs[k]});
-                    candidates.push_back({dist(from, to), to});
-                    std::sort(candidates.begin(), candidates.end());
-                    auto selected = select_neighbors(candidates, M_max);
-                    cnt = static_cast<uint8_t>(selected.size());
-                    for (int k = 0; k < (int)selected.size(); ++k) nbrs[k] = selected[k];
-                    for (int k = cnt; k < M_max; ++k) nbrs[k] = kInvalidNode;
-                }
-            };
-            add_one_flat(u, v);
-            add_one_flat(v, u);
+            uint8_t& cnt  = adj0_count_[from];
+            NodeId*  nbrs = adj0_ptr(from);
+            if (cnt < static_cast<uint8_t>(M_max)) {
+                nbrs[cnt++] = to;
+            } else {
+                std::vector<std::pair<float, NodeId>> candidates;
+                candidates.reserve(cnt + 1);
+                for (int k = 0; k < cnt; ++k)
+                    candidates.push_back({dist(from, nbrs[k]), nbrs[k]});
+                candidates.push_back({dist(from, to), to});
+                std::sort(candidates.begin(), candidates.end());
+                auto selected = select_neighbors(candidates, M_max);
+                cnt = static_cast<uint8_t>(selected.size());
+                for (int k = 0; k < (int)selected.size(); ++k) nbrs[k] = selected[k];
+                for (int k = cnt; k < M_max; ++k) nbrs[k] = kInvalidNode;
+            }
         } else {
-            auto add_one = [&](NodeId from, NodeId to) {
-                auto& nbrs = nodes_flat_[from].neighbors[layer];
-                if (static_cast<int>(nbrs.size()) < M_max) {
-                    nbrs.push_back(to);
-                } else {
-                    std::vector<std::pair<float, NodeId>> candidates;
-                    candidates.reserve(nbrs.size() + 1);
-                    for (NodeId n : nbrs)
-                        candidates.push_back({dist(from, n), n});
-                    candidates.push_back({dist(from, to), to});
-                    std::sort(candidates.begin(), candidates.end());
-                    nbrs = select_neighbors(candidates, M_max);
-                }
-            };
-            add_one(u, v);
-            add_one(v, u);
+            auto& nbrs = nodes_flat_[from].neighbors[layer];
+            if (static_cast<int>(nbrs.size()) < M_max) {
+                nbrs.push_back(to);
+            } else {
+                std::vector<std::pair<float, NodeId>> candidates;
+                candidates.reserve(nbrs.size() + 1);
+                for (NodeId n : nbrs)
+                    candidates.push_back({dist(from, n), n});
+                candidates.push_back({dist(from, to), to});
+                std::sort(candidates.begin(), candidates.end());
+                nbrs = select_neighbors(candidates, M_max);
+            }
         }
+    }
+
+    // Bidirectional edge (single-threaded path only).
+    void add_edge(NodeId u, NodeId v, int layer, int M_max) {
+        add_directed(u, v, layer, M_max);
+        add_directed(v, u, layer, M_max);
     }
 };
 
 // ---------------------------------------------------------------------------
-// HnswIndex public API
+// Single-threaded insert helper (used by insert() and insert_for_recovery())
 // ---------------------------------------------------------------------------
 
-// Constructs an empty index with the given config. All parameters (dim, metric, M, M0,
-// ef_construction) are fixed at construction time and cannot be changed afterwards.
-HnswIndex::HnswIndex(HnswConfig cfg) : impl_(std::make_unique<Impl>(cfg)) {}
-HnswIndex::~HnswIndex() = default;
-
-// Internal helper: inserts a vector with a specific NodeId.
-// Used by both insert() (auto-id) and insert_for_recovery() (explicit id).
 static void insert_with_id(HnswIndex::Impl& I, NodeId id, const float* vec) {
-
-    // Store the vector in the flat array (grows if id > current max).
     I.store_vec(id, vec);
 
-    // Determine whether this is a new node or a re-insert of an existing one.
-    // live_count must only be incremented if the node is new or was tombstoned —
-    // re-inserting a live node (e.g. same WAL record replayed twice) must not
-    // double-count it.
     bool is_new         = !I.node_exists(id);
     bool was_tombstoned = !is_new && I.nodes_flat_[id].tombstone;
 
-    // Create the node and assign a random layer.
     int assigned_layer = I.assign_layer();
     I.grow_nodes(id);
     I.grow_adj0(id);
@@ -361,115 +333,220 @@ static void insert_with_id(HnswIndex::Impl& I, NodeId id, const float* vec) {
     node.tombstone  = false;
     node.neighbors.assign(assigned_layer + 1, {});
     if (is_new || was_tombstoned)
-        ++I.live_count;
+        I.live_count_.fetch_add(1, std::memory_order_relaxed);
 
-    // First node becomes the entry point.
-    if (I.entry_point == kInvalidNode) {
-        I.entry_point = id;
-        I.max_layer   = assigned_layer;
+    if (I.entry_point_.load(std::memory_order_relaxed) == kInvalidNode) {
+        I.entry_point_.store(id, std::memory_order_relaxed);
+        I.max_layer_.store(assigned_layer, std::memory_order_relaxed);
         return;
     }
 
-    NodeId entry_point = I.entry_point;
+    NodeId entry_point = I.entry_point_.load(std::memory_order_relaxed);
+    int    cur_max     = I.max_layer_.load(std::memory_order_relaxed);
 
-    // Phase 1: greedy descent from max_layer to assigned_layer+1 (ef=1, find entry point).
-    for (int level = I.max_layer; level > assigned_layer; --level) {
+    for (int level = cur_max; level > assigned_layer; --level) {
         auto candidates = I.search_layer(vec, entry_point, 1, level);
         if (!candidates.empty()) entry_point = candidates[0].second;
     }
 
-    // Phase 2: for each layer from assigned_layer down to 0, find the best neighbors
-    // for the new node and connect bidirectional edges at that layer.
-    // Layer 0 uses M0 (larger) as the neighbor cap; all other layers use M.
-    // After each layer, update entry_point to the closest candidate found — this
-    // gives a better starting point for the beam search on the next (lower) layer.
-    for (int level = std::min(assigned_layer, I.max_layer); level >= 0; --level) {
-        // layer 0 gets a larger neighbor cap (M0) since it's the main search layer.
+    for (int level = std::min(assigned_layer, cur_max); level >= 0; --level) {
         int max_neighbors = (level == 0) ? I.cfg.M0 : I.cfg.M;
+        auto candidates   = I.search_layer(vec, entry_point, I.cfg.ef_construction, level);
+        auto neighbors    = I.select_neighbors(candidates, max_neighbors);
 
-        // beam search to find the ef_construction closest nodes to the new vector at this level.
-        auto candidates = I.search_layer(vec, entry_point, I.cfg.ef_construction, level);
-
-        // pick the best max_neighbors diverse candidates (heuristic pruning, Algorithm 4).
-        auto neighbors = I.select_neighbors(candidates, max_neighbors);
-
-        // ensure the node's neighbor list is sized for this level before connecting edges.
         auto& node_nbrs = I.nodes_flat_[id].neighbors;
         if (static_cast<int>(node_nbrs.size()) <= level)
             node_nbrs.resize(level + 1);
 
-        // connect bidirectional edges between the new node and each selected neighbor.
-        for (NodeId neighbor : neighbors) {
+        for (NodeId neighbor : neighbors)
             I.add_edge(id, neighbor, level, max_neighbors);
-        }
 
-        // Update entry_point to the closest node found at this layer before descending.
-        // A node assigned layer l has a separate neighbor list at each layer 0..l,
-        // so the same node id is a valid entry point one layer down — just with a
-        // different (layer-specific) set of neighbors. Starting closer to the new node
-        // at each level reduces the beam search work at the next level.
         if (!candidates.empty()) entry_point = candidates[0].second;
     }
 
-    // Update entry point if new node reaches a higher layer.
-    if (assigned_layer > I.max_layer) {
-        I.entry_point = id;
-        I.max_layer   = assigned_layer;
+    if (assigned_layer > cur_max) {
+        I.entry_point_.store(id, std::memory_order_relaxed);
+        I.max_layer_.store(assigned_layer, std::memory_order_relaxed);
     }
 }
 
-// Auto-assigns sequential NodeId using next_id_ counter.
-// Returns the assigned NodeId.
+// ---------------------------------------------------------------------------
+// Multi-threaded insert helper (used by insert_batch_mt())
+//
+// Concurrency model (matches hnswlib):
+//   - search_layer: lock-free dirty reads (ANN tolerates stale edges)
+//   - new node's own data: owned exclusively by this thread until edges are added
+//   - back-edges (neighbor → new_node): protected by stripe_lock(neighbor)
+//   - entry_point / max_layer updates: protected by entry_mu_
+// ---------------------------------------------------------------------------
+
+static void insert_with_id_mt(HnswIndex::Impl& I, NodeId id, const float* vec) {
+    std::memcpy(I.vec_ptr(id), vec, I.cfg.dim * sizeof(float));
+
+    int assigned_layer = I.assign_layer_mt();
+
+    // Initialize node data under stripe_lock(id) so that any concurrent
+    // search_layer call that copies this node's upper-layer neighbor list
+    // (also under stripe_lock(id)) sees a consistent, fully-assigned vector.
+    {
+        std::lock_guard<std::mutex> lk(I.stripe_lock(id));
+        I.nodes_flat_[id].id        = id;
+        I.nodes_flat_[id].layer     = assigned_layer;
+        I.nodes_flat_[id].tombstone = false;
+        I.nodes_flat_[id].neighbors.assign(assigned_layer + 1, {});
+        // Pre-reserve upper-layer vectors so push_back never reallocates
+        // while another thread holds the same stripe lock for a copy.
+        for (int lv = 1; lv <= assigned_layer; ++lv)
+            I.nodes_flat_[id].neighbors[lv].reserve(I.cfg.M);
+    }
+    I.live_count_.fetch_add(1, std::memory_order_relaxed);
+
+    // Take a consistent snapshot of entry_point + max_layer.
+    // The first-node case is also handled here so entry_point and max_layer
+    // are always updated atomically (prevents a second thread from seeing
+    // entry_point = X but max_layer = -1).
+    NodeId entry_point;
+    int    cur_max;
+    {
+        std::lock_guard<std::mutex> lk(I.entry_mu_);
+        entry_point = I.entry_point_.load(std::memory_order_relaxed);
+        cur_max     = I.max_layer_.load(std::memory_order_relaxed);
+        if (entry_point == kInvalidNode) {
+            I.max_layer_.store(assigned_layer, std::memory_order_relaxed);
+            I.entry_point_.store(id, std::memory_order_relaxed);
+            return;
+        }
+    }
+
+    // Phase 1: greedy descent to assigned_layer+1.
+    for (int level = cur_max; level > assigned_layer; --level) {
+        auto cands = I.search_layer(vec, entry_point, 1, level);
+        if (!cands.empty()) entry_point = cands[0].second;
+    }
+
+    // Phase 2: beam search + bidirectional edges.
+    for (int level = std::min(assigned_layer, cur_max); level >= 0; --level) {
+        int M_max  = (level == 0) ? I.cfg.M0 : I.cfg.M;
+        auto cands = I.search_layer(vec, entry_point, I.cfg.ef_construction, level);
+        auto nbrs  = I.select_neighbors(cands, M_max);
+
+        for (NodeId nbr : nbrs) {
+            // Both forward (id→nbr) and back (nbr→id) edges must hold the
+            // respective node's stripe lock. Without locking the forward edge,
+            // a concurrent thread adding a back-edge to id (under stripe_lock(id))
+            // races with this thread updating adj0_count_[id], losing edges and
+            // degrading recall. Both locks are taken separately (never simultaneously)
+            // so there is no deadlock risk.
+            {
+                std::lock_guard<std::mutex> lk(I.stripe_lock(id));
+                I.add_directed(id, nbr, level, M_max);
+            }
+            {
+                std::lock_guard<std::mutex> lk(I.stripe_lock(nbr));
+                I.add_directed(nbr, id, level, M_max);
+            }
+        }
+
+        if (!cands.empty()) entry_point = cands[0].second;
+    }
+
+    // Update global entry point if we reached a new max layer.
+    if (assigned_layer > cur_max) {
+        std::lock_guard<std::mutex> lk(I.entry_mu_);
+        if (assigned_layer > I.max_layer_.load(std::memory_order_relaxed)) {
+            I.max_layer_.store(assigned_layer, std::memory_order_relaxed);
+            I.entry_point_.store(id, std::memory_order_relaxed);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HnswIndex public API
+// ---------------------------------------------------------------------------
+
+HnswIndex::HnswIndex(HnswConfig cfg) : impl_(std::make_unique<Impl>(cfg)) {}
+HnswIndex::~HnswIndex() = default;
+
 NodeId HnswIndex::insert(const float* vec) {
-    auto& I = *impl_;
-    NodeId id = I.next_id_++;
+    auto& I  = *impl_;
+    NodeId id = I.next_id_.fetch_add(1, std::memory_order_relaxed);
     insert_with_id(I, id, vec);
     return id;
 }
 
-// Used for WAL replay and re-inserts with an existing NodeId.
-// Updates next_id_ = max(next_id_, id+1) so future auto-assigns don't collide.
 void HnswIndex::insert_for_recovery(NodeId id, const float* vec) {
     auto& I = *impl_;
-    if (id + 1 > I.next_id_)
-        I.next_id_ = id + 1;
+    NodeId cur = I.next_id_.load(std::memory_order_relaxed);
+    while (id + 1 > cur) {
+        if (I.next_id_.compare_exchange_weak(cur, id + 1,
+                std::memory_order_relaxed, std::memory_order_relaxed))
+            break;
+    }
+    // If the node was already loaded from a graph snapshot, skip re-insertion
+    // so WAL replay is idempotent and doesn't corrupt existing edges.
+    if (I.node_exists(id) && !I.nodes_flat_[id].tombstone)
+        return;
     insert_with_id(I, id, vec);
 }
 
-// Returns the k approximate nearest neighbors of query, sorted ascending by distance.
-//   query:     pointer to the float array of length cfg.dim.
-//   k:         number of results to return.
-//   ef_search: beam width at layer 0; higher = better recall, slower query.
-//              should be >= k — beam search finds ef_search candidates before filtering
-//              tombstones, so if ef_search == k and some are tombstoned, fewer than k
-//              results will be returned. if ef_search < k, it is clamped to k internally.
-// Tombstoned nodes are excluded from results. Returns fewer than k if the index
-// has fewer than k live nodes.
+// Parallel batch insert: pre-assigns all NodeIds, pre-grows all arrays, then
+// spawns num_threads threads each inserting its slice. Returns the first NodeId
+// assigned (IDs are first_id, first_id+1, ..., first_id+count-1).
+NodeId HnswIndex::insert_batch_mt(const float* vecs, size_t count, int num_threads) {
+    if (count == 0) return impl_->next_id_.load();
+    auto& I = *impl_;
+
+    // Pre-assign IDs atomically.
+    NodeId first_id = I.next_id_.fetch_add(static_cast<NodeId>(count),
+                                            std::memory_order_relaxed);
+    NodeId last_id  = first_id + static_cast<NodeId>(count) - 1;
+
+    // Pre-grow arrays single-threadedly to avoid resize races.
+    I.grow_node_block(last_id);
+    I.grow_nodes(last_id);
+
+    if (num_threads <= 0)
+        num_threads = static_cast<int>(std::thread::hardware_concurrency());
+    num_threads = std::max(1, std::min(num_threads, static_cast<int>(count)));
+
+    if (num_threads == 1) {
+        for (size_t i = 0; i < count; ++i)
+            insert_with_id_mt(I, first_id + i, vecs + i * I.cfg.dim);
+    } else {
+        std::vector<std::thread> threads;
+        threads.reserve(num_threads);
+        size_t chunk = (count + num_threads - 1) / num_threads;
+        for (int t = 0; t < num_threads; ++t) {
+            size_t start = (size_t)t * chunk;
+            size_t end   = std::min(start + chunk, count);
+            if (start >= count) break;
+            threads.emplace_back([&, start, end] {
+                for (size_t i = start; i < end; ++i)
+                    insert_with_id_mt(I, first_id + i, vecs + i * I.cfg.dim);
+            });
+        }
+        for (auto& t : threads) t.join();
+    }
+    return first_id;
+}
+
 std::vector<std::pair<float, NodeId>> HnswIndex::search(
     const float* query, int k, int ef_search) const
 {
     auto& I = *impl_;
-    if (I.entry_point == kInvalidNode) return {};
+    if (I.entry_point_.load(std::memory_order_relaxed) == kInvalidNode) return {};
 
-    NodeId entry_point = I.entry_point;
+    NodeId entry_point = I.entry_point_.load(std::memory_order_acquire);
+    int    max_layer   = I.max_layer_.load(std::memory_order_acquire);
 
-    // Step 1: greedy descent from max_layer to layer 1 (ef=1).
-    // Quickly navigates to a node close to the query without exploring exhaustively.
-    // Stops at layer 1 — layer 0 is handled separately with a full beam search.
-    for (int level = I.max_layer; level > 0; --level) {
+    for (int level = max_layer; level > 0; --level) {
         auto candidates = I.search_layer(query, entry_point, 1, level);
         if (!candidates.empty()) entry_point = candidates[0].second;
     }
 
-    // Step 2: full beam search at layer 0.
-    // Layer 0 contains all nodes with the shortest, densest edges — this is where
-    // the precise nearest neighbor search happens. beam_width = max(k, ef_search)
-    // ensures enough candidates are found even after tombstones are filtered out.
     int beam_width = std::max(k, ef_search);
     auto candidates = I.search_layer(query, entry_point, beam_width, 0);
 
-    // Step 3: filter tombstoned nodes and return the top-k results.
-    // candidates is already sorted ascending by distance, so iterate in order.
     std::vector<std::pair<float, NodeId>> result;
     result.reserve(k);
     for (auto& [dist, id] : candidates) {
@@ -480,16 +557,47 @@ std::vector<std::pair<float, NodeId>> HnswIndex::search(
     return result;
 }
 
+std::vector<std::vector<std::pair<float, NodeId>>> HnswIndex::search_batch(
+    const float* queries, int n_queries, int k, int ef_search,
+    int num_threads) const
+{
+    std::vector<std::vector<std::pair<float, NodeId>>> results(n_queries);
+    if (n_queries == 0) return results;
+
+    const size_t dim = impl_->cfg.dim;
+    if (num_threads <= 0) num_threads = static_cast<int>(std::thread::hardware_concurrency());
+    num_threads = std::max(1, std::min(num_threads, n_queries));
+
+    if (num_threads == 1) {
+        for (int i = 0; i < n_queries; ++i)
+            results[i] = search(queries + (size_t)i * dim, k, ef_search);
+        return results;
+    }
+
+    std::vector<std::thread> threads;
+    threads.reserve(num_threads);
+    int chunk = (n_queries + num_threads - 1) / num_threads;
+    for (int t = 0; t < num_threads; ++t) {
+        int start = t * chunk;
+        int end   = std::min(start + chunk, n_queries);
+        if (start >= n_queries) break;
+        threads.emplace_back([&, start, end] {
+            for (int i = start; i < end; ++i)
+                results[i] = search(queries + (size_t)i * dim, k, ef_search);
+        });
+    }
+    for (auto& th : threads) th.join();
+    return results;
+}
+
 void HnswIndex::remove(NodeId id) {
     auto& I = *impl_;
     if (!I.node_exists(id) || I.nodes_flat_[id].tombstone) return;
     I.nodes_flat_[id].tombstone = true;
-    --I.live_count;
+    I.live_count_.fetch_sub(1, std::memory_order_relaxed);
 }
 
-size_t HnswIndex::size() const {
-    return impl_->live_count;
-}
+size_t HnswIndex::size() const { return impl_->live_count_.load(); }
 
 size_t HnswIndex::neighbor_count(NodeId id, int layer) const {
     auto& I = *impl_;
@@ -534,7 +642,6 @@ std::vector<HnswIndex::NodeData> HnswIndex::snapshot() const {
         nd.layer     = node.layer;
         nd.tombstone = node.tombstone;
         nd.vec = std::vector<float>(I.vec_ptr(node.id), I.vec_ptr(node.id) + I.cfg.dim);
-        // Layer-0 neighbors live in adj0_, not in node.neighbors.
         int cnt = I.adj0_count_[node.id];
         const NodeId* p = I.adj0_ptr(node.id);
         nd.neighbors.resize(std::max(1, node.layer + 1));
@@ -547,17 +654,21 @@ std::vector<HnswIndex::NodeData> HnswIndex::snapshot() const {
     return out;
 }
 
-NodeId HnswIndex::entry_point_id() const { return impl_->entry_point; }
-int    HnswIndex::max_layer_val()   const { return impl_->max_layer; }
+NodeId HnswIndex::entry_point_id() const {
+    return impl_->entry_point_.load(std::memory_order_relaxed);
+}
+int HnswIndex::max_layer_val() const {
+    return impl_->max_layer_.load(std::memory_order_relaxed);
+}
 
 void HnswIndex::restore(NodeId entry_point, int max_layer, size_t live_count,
                         std::vector<NodeData> nodes) {
     auto& I = *impl_;
     if (!I.nodes_flat_.empty())
         throw std::logic_error("HnswIndex::restore called on a non-empty index");
-    I.entry_point = entry_point;
-    I.max_layer   = max_layer;
-    I.live_count  = live_count;
+    I.entry_point_.store(entry_point, std::memory_order_relaxed);
+    I.max_layer_.store(max_layer,     std::memory_order_relaxed);
+    I.live_count_.store(live_count,   std::memory_order_relaxed);
     for (auto& nd : nodes) {
         I.store_vec(nd.id, nd.vec.data());
         I.grow_nodes(nd.id);
@@ -566,7 +677,6 @@ void HnswIndex::restore(NodeId entry_point, int max_layer, size_t live_count,
         node.id         = nd.id;
         node.layer      = nd.layer;
         node.tombstone  = nd.tombstone;
-        // Layer-0 neighbors go into adj0_; upper layers stay in node.neighbors.
         if (!nd.neighbors.empty()) {
             const auto& l0 = nd.neighbors[0];
             uint8_t cnt = static_cast<uint8_t>(std::min((int)l0.size(), I.cfg.M0));
@@ -574,10 +684,13 @@ void HnswIndex::restore(NodeId entry_point, int max_layer, size_t live_count,
             NodeId* p = I.adj0_ptr(nd.id);
             for (int k = 0; k < cnt; ++k) p[k] = l0[k];
         }
-        node.neighbors = std::move(nd.neighbors);  // keep upper layers; [0] ignored
-        // Update next_id_ so auto-assigns after restore() don't collide.
-        if (nd.id + 1 > I.next_id_)
-            I.next_id_ = nd.id + 1;
+        node.neighbors = std::move(nd.neighbors);
+        NodeId cur = I.next_id_.load(std::memory_order_relaxed);
+        while (nd.id + 1 > cur) {
+            if (I.next_id_.compare_exchange_weak(cur, nd.id + 1,
+                    std::memory_order_relaxed, std::memory_order_relaxed))
+                break;
+        }
     }
 }
 

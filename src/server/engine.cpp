@@ -145,7 +145,7 @@ struct Engine::Impl {
         }
         ::close(fd);
         if (::rename(tmp.c_str(), path.c_str()) != 0)
-            throw std::runtime_error("Engine: rename id_map failed");
+            throw std::runtime_error("Engine: rename id_map failed: " + std::string(strerror(errno)));
     }
 
     // Open or recover a collection from disk.
@@ -319,44 +319,76 @@ std::vector<std::string> Engine::insert_batch(
     std::vector<std::string>  assigned(count);
     std::vector<NodeId>       node_ids(count);
 
-    // Phase 1: assign NodeIds, insert into HNSW, append WAL records (no sync yet).
-    // VectorFile and MetadataIndex updates come after sync to keep the commit order
-    // consistent with the single-insert path.
-    for (size_t i = 0; i < count; ++i) {
-        const float*       vec      = vecs + i * dim;
-        const std::string& user_id  = user_ids.empty() ? "" : user_ids[i];
-        const MetadataEntry& meta   = metas.empty()    ? MetadataEntry{} : metas[i];
-
-        NodeId      node_id;
-        std::string effective_id;
-
-        auto uid_it = (!user_id.empty())
-                      ? state.user_to_node.find(user_id)
-                      : state.user_to_node.end();
-
-        if (!user_id.empty() && uid_it != state.user_to_node.end()) {
-            effective_id = user_id;
-            node_id      = uid_it->second;
-            state.index->insert_for_recovery(node_id, vec);
-        } else {
-            node_id      = state.index->insert(vec);
-            effective_id = user_id.empty() ? std::to_string(node_id) : user_id;
-            state.user_to_node[effective_id] = node_id;
-            state.node_to_user[node_id]      = effective_id;
-        }
-
-        auto payload = make_insert_payload(node_id, effective_id, vec, dim, meta);
-        state.wal->append(WalRecordType::Insert, payload.data(),
-                          static_cast<uint32_t>(payload.size()));
-
-        node_ids[i]  = node_id;
-        assigned[i]  = std::move(effective_id);
+    // Fast path: if all user_ids are new (no re-inserts), use multi-threaded
+    // HNSW insert. insert_batch_mt assigns IDs atomically, pre-grows all arrays,
+    // then spawns hardware_concurrency() threads each inserting its slice.
+    bool all_new = true;
+    for (size_t i = 0; i < count && all_new; ++i) {
+        const std::string& uid = user_ids.empty() ? "" : user_ids[i];
+        if (!uid.empty() && state.user_to_node.count(uid))
+            all_new = false;
     }
 
-    // Phase 2: single fdatasync for the whole batch.
+    if (all_new) {
+        // Phase 1: parallel HNSW insert — returns first assigned NodeId.
+        NodeId first_id = state.index->insert_batch_mt(vecs, count);
+
+        // Phase 2: update id maps + append WAL records (no sync yet).
+        for (size_t i = 0; i < count; ++i) {
+            NodeId      node_id      = first_id + static_cast<NodeId>(i);
+            const std::string& uid   = user_ids.empty() ? "" : user_ids[i];
+            std::string effective_id = uid.empty() ? std::to_string(node_id) : uid;
+            const float* vec         = vecs + i * dim;
+            const MetadataEntry& meta = metas.empty() ? MetadataEntry{} : metas[i];
+
+            state.user_to_node[effective_id] = node_id;
+            state.node_to_user[node_id]      = effective_id;
+
+            auto payload = make_insert_payload(node_id, effective_id, vec, dim, meta);
+            state.wal->append(WalRecordType::Insert, payload.data(),
+                              static_cast<uint32_t>(payload.size()));
+
+            node_ids[i]  = node_id;
+            assigned[i]  = std::move(effective_id);
+        }
+    } else {
+        // Slow path: sequential insert (handles re-inserts of existing user_ids).
+        for (size_t i = 0; i < count; ++i) {
+            const float*       vec     = vecs + i * dim;
+            const std::string& user_id = user_ids.empty() ? "" : user_ids[i];
+            const MetadataEntry& meta  = metas.empty() ? MetadataEntry{} : metas[i];
+
+            NodeId      node_id;
+            std::string effective_id;
+
+            auto uid_it = (!user_id.empty())
+                          ? state.user_to_node.find(user_id)
+                          : state.user_to_node.end();
+
+            if (!user_id.empty() && uid_it != state.user_to_node.end()) {
+                effective_id = user_id;
+                node_id      = uid_it->second;
+                state.index->insert_for_recovery(node_id, vec);
+            } else {
+                node_id      = state.index->insert(vec);
+                effective_id = user_id.empty() ? std::to_string(node_id) : user_id;
+                state.user_to_node[effective_id] = node_id;
+                state.node_to_user[node_id]      = effective_id;
+            }
+
+            auto payload = make_insert_payload(node_id, effective_id, vec, dim, meta);
+            state.wal->append(WalRecordType::Insert, payload.data(),
+                              static_cast<uint32_t>(payload.size()));
+
+            node_ids[i]  = node_id;
+            assigned[i]  = std::move(effective_id);
+        }
+    }
+
+    // Single fdatasync for the whole batch.
     state.wal->sync();
 
-    // Phase 3: VectorFile + MetadataIndex (in-memory, no fsync needed).
+    // VectorFile + MetadataIndex (in-memory, no fsync needed).
     for (size_t i = 0; i < count; ++i) {
         const float*       vec  = vecs + i * dim;
         const MetadataEntry& meta = metas.empty() ? MetadataEntry{} : metas[i];
@@ -387,6 +419,59 @@ void Engine::remove(const std::string& collection, const std::string& user_id) {
     state.index->remove(node_id);
     state.meta->remove(node_id);
     // Do NOT erase from id maps — keep mapping for re-insert consistency.
+}
+
+std::vector<std::vector<SearchResult>> Engine::search_batch(
+    const BatchSearchRequest& req) const
+{
+    std::shared_lock lock(impl_->mu);
+    auto it = impl_->cols.find(req.collection);
+    if (it == impl_->cols.end())
+        throw std::runtime_error("Engine: collection not found: " + req.collection);
+    const auto& state = it->second;
+
+    bool has_filter = !req.filters.empty();
+    std::unordered_set<NodeId> allowlist;
+    if (has_filter) {
+        bool first = true;
+        for (auto& f : req.filters) {
+            std::vector<NodeId> matches;
+            if (f.op == FieldFilter::Op::Eq)
+                matches = state.meta->query_eq(f.field, f.str_val);
+            else
+                matches = state.meta->query_range(f.field, f.lo, f.hi);
+            if (first) {
+                allowlist.insert(matches.begin(), matches.end());
+                first = false;
+            } else {
+                std::unordered_set<NodeId> tmp;
+                for (NodeId id : matches)
+                    if (allowlist.count(id)) tmp.insert(id);
+                allowlist = std::move(tmp);
+            }
+        }
+    }
+
+    int ef       = req.ef_search;
+    if (has_filter) ef = std::max(ef, req.top_k * 5);
+    int search_k = has_filter ? ef : req.top_k;
+
+    auto raw_batch = state.index->search_batch(
+        req.queries, req.n_queries, search_k, ef, req.num_threads);
+
+    std::vector<std::vector<SearchResult>> results(req.n_queries);
+    for (int i = 0; i < req.n_queries; ++i) {
+        results[i].reserve(req.top_k);
+        for (auto& [dist, node_id] : raw_batch[i]) {
+            if (has_filter && !allowlist.count(node_id)) continue;
+            auto uid_it = state.node_to_user.find(node_id);
+            std::string uid = (uid_it != state.node_to_user.end())
+                              ? uid_it->second : std::to_string(node_id);
+            results[i].push_back({dist, std::move(uid)});
+            if (static_cast<int>(results[i].size()) == req.top_k) break;
+        }
+    }
+    return results;
 }
 
 std::vector<SearchResult> Engine::search(const SearchRequest& req) const {
