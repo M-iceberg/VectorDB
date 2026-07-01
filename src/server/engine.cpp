@@ -300,6 +300,74 @@ std::string Engine::insert(const std::string& collection, const std::string& use
     return effective_id;
 }
 
+std::vector<std::string> Engine::insert_batch(
+    const std::string& collection,
+    const std::vector<std::string>& user_ids,
+    const float* vecs,
+    size_t count,
+    const std::vector<MetadataEntry>& metas)
+{
+    if (count == 0) return {};
+
+    std::unique_lock lock(impl_->mu);
+    auto it = impl_->cols.find(collection);
+    if (it == impl_->cols.end())
+        throw std::runtime_error("Engine: collection not found: " + collection);
+    auto& state = it->second;
+    const size_t dim = state.schema.dim;
+
+    std::vector<std::string>  assigned(count);
+    std::vector<NodeId>       node_ids(count);
+
+    // Phase 1: assign NodeIds, insert into HNSW, append WAL records (no sync yet).
+    // VectorFile and MetadataIndex updates come after sync to keep the commit order
+    // consistent with the single-insert path.
+    for (size_t i = 0; i < count; ++i) {
+        const float*       vec      = vecs + i * dim;
+        const std::string& user_id  = user_ids.empty() ? "" : user_ids[i];
+        const MetadataEntry& meta   = metas.empty()    ? MetadataEntry{} : metas[i];
+
+        NodeId      node_id;
+        std::string effective_id;
+
+        auto uid_it = (!user_id.empty())
+                      ? state.user_to_node.find(user_id)
+                      : state.user_to_node.end();
+
+        if (!user_id.empty() && uid_it != state.user_to_node.end()) {
+            effective_id = user_id;
+            node_id      = uid_it->second;
+            state.index->insert_for_recovery(node_id, vec);
+        } else {
+            node_id      = state.index->insert(vec);
+            effective_id = user_id.empty() ? std::to_string(node_id) : user_id;
+            state.user_to_node[effective_id] = node_id;
+            state.node_to_user[node_id]      = effective_id;
+        }
+
+        auto payload = make_insert_payload(node_id, effective_id, vec, dim, meta);
+        state.wal->append(WalRecordType::Insert, payload.data(),
+                          static_cast<uint32_t>(payload.size()));
+
+        node_ids[i]  = node_id;
+        assigned[i]  = std::move(effective_id);
+    }
+
+    // Phase 2: single fdatasync for the whole batch.
+    state.wal->sync();
+
+    // Phase 3: VectorFile + MetadataIndex (in-memory, no fsync needed).
+    for (size_t i = 0; i < count; ++i) {
+        const float*       vec  = vecs + i * dim;
+        const MetadataEntry& meta = metas.empty() ? MetadataEntry{} : metas[i];
+        state.vf->append(vec);
+        for (auto& [f, v] : meta.strings)  state.meta->insert_string(f, v, node_ids[i]);
+        for (auto& [f, v] : meta.numerics) state.meta->insert_numeric(f, v, node_ids[i]);
+    }
+
+    return assigned;
+}
+
 void Engine::remove(const std::string& collection, const std::string& user_id) {
     std::unique_lock lock(impl_->mu);
     auto it = impl_->cols.find(collection);

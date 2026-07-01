@@ -60,15 +60,17 @@ class VectorDB:
             raise ValueError(
                 f"len(ids)={len(ids_list)} does not match vectors.shape[0]={n}")
 
-        assigned = []
-        for i, user_id in enumerate(ids_list):
-            if metadata is None:
-                meta = None
-            elif isinstance(metadata, list):
-                meta = metadata[i]
-            else:
-                meta = metadata
-            assigned.append(self._engine.insert(collection, user_id, vectors[i], meta))
+        # Build metadata list (None entries mean no metadata for that vector).
+        if metadata is None:
+            metas = None
+        elif isinstance(metadata, list):
+            metas = [m if isinstance(m, dict) else None for m in metadata]
+        else:
+            metas = [metadata] * n
+
+        # Single batch call: one fdatasync for the whole batch instead of one per vector.
+        assigned = self._engine.insert_batch(
+            collection, ids_list, vectors, metas)
         return assigned
 
     # ------------------------------------------------------------------

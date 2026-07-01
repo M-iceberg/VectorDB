@@ -120,6 +120,43 @@ PYBIND11_MODULE(_vectordb, m) {
                 return out;
             })
 
+        // Batch insert: one fdatasync per batch instead of one per vector.
+        // vecs: 2-D float32 numpy array (N × dim).
+        // user_ids: list of N strings, or empty list for auto-assign.
+        // metadatas: list of N dicts, or None for no metadata.
+        .def("insert_batch",
+            [](Engine& self, const std::string& collection,
+               const std::vector<std::string>& user_ids,
+               py::array_t<float, py::array::c_style | py::array::forcecast> vecs,
+               py::object metadatas) -> py::list {
+                auto buf = vecs.request();
+                if (buf.ndim != 2)
+                    throw std::invalid_argument("vectors must be 2-D");
+                size_t count = static_cast<size_t>(buf.shape[0]);
+                const float* ptr = static_cast<const float*>(buf.ptr);
+
+                std::vector<MetadataEntry> metas;
+                if (!metadatas.is_none()) {
+                    auto lst = metadatas.cast<py::list>();
+                    metas.reserve(count);
+                    for (size_t i = 0; i < count; ++i) {
+                        auto item = lst[i];
+                        if (item.is_none())
+                            metas.emplace_back();
+                        else
+                            metas.push_back(parse_metadata(item.cast<py::dict>()));
+                    }
+                }
+
+                auto assigned = self.insert_batch(collection, user_ids, ptr, count, metas);
+
+                py::list out;
+                for (auto& s : assigned) out.append(s);
+                return out;
+            },
+            py::arg("collection"), py::arg("user_ids"), py::arg("vectors"),
+            py::arg("metadatas") = py::none())
+
         // insert with optional metadata dict; returns the effective user_id string
         .def("insert",
             [](Engine& self, const std::string& collection,

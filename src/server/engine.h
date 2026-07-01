@@ -89,6 +89,18 @@ public:
     // Returns the effective user_id (either the provided one or the auto-assigned NodeId as string).
     std::string insert(const std::string& collection, const std::string& user_id,
                        const float* vec, const MetadataEntry& meta = {});
+
+    // Batch insert: appends all WAL records then calls fdatasync() once for the whole
+    // batch instead of once per vector. vecs is row-major: vecs[i*dim..(i+1)*dim-1]
+    // is the i-th vector. user_ids and metas may be empty (auto-assign / no metadata).
+    // Returns effective user_ids in the same order as input.
+    std::vector<std::string> insert_batch(
+        const std::string& collection,
+        const std::vector<std::string>& user_ids,
+        const float* vecs,
+        size_t count,
+        const std::vector<MetadataEntry>& metas = {});
+
     void remove(const std::string& collection, const std::string& user_id);
 
     std::vector<SearchResult> search(const SearchRequest& req) const;

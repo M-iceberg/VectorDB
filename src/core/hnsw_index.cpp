@@ -72,47 +72,53 @@ struct HnswIndex::Impl {
         return id < nodes_flat_.size() && nodes_flat_[id].id != kInvalidNode;
     }
 
-    // Layer-0 adjacency: flat CSR array for the hot search path.
-    // adj0_[id * M0 + k]   = k-th neighbor of node id at layer 0 (kInvalidNode = empty slot)
-    // adj0_count_[id]       = number of valid neighbors (≤ cfg.M0)
-    // Both are indexed by NodeId and grown with grow_adj0() on insert.
+    // Unified per-node storage: each node occupies one contiguous block of
+    // (cfg.M0 + cfg.dim) uint32_t elements, laid out as:
+    //   [adj0 neighbors: cfg.M0 × NodeId] [vector data: cfg.dim × float]
+    //
+    // Collocating adj0 and vec in one array means a single prefetch of node n's
+    // block warms up both its neighbor list (needed when n becomes a candidate)
+    // and its vector (needed for dist_q). With separate adj0_ and vecs_flat_,
+    // accessing neighbor n required two separate random-access trips into two
+    // different memory regions; the hardware prefetcher could not predict either.
+    //
+    // node_stride_ = cfg.M0 + cfg.dim  (in uint32_t units; sizeof(NodeId)==sizeof(float)==4)
+    // adj0_ptr(id) = &node_blocks_[id * node_stride_]              → NodeId[cfg.M0]
+    // vec_ptr(id)  = (float*)&node_blocks_[id * node_stride_ + M0] → float[cfg.dim]
+    //
+    // adj0_count_[id] = number of valid layer-0 neighbors for node id (≤ cfg.M0).
     // Upper-layer neighbors (layer ≥ 1) remain in nodes_flat_[id].neighbors[layer].
-    std::vector<NodeId>  adj0_;
-    std::vector<uint8_t> adj0_count_;
+    size_t                node_stride_ = 0;
+    std::vector<uint32_t> node_blocks_;
+    std::vector<uint8_t>  adj0_count_;
 
-    void grow_adj0(NodeId id) {
-        size_t needed = (size_t)(id + 1) * cfg.M0;
-        if (needed > adj0_.size()) {
-            adj0_.resize(needed, kInvalidNode);
+    void grow_node_block(NodeId id) {
+        if (id > max_node_id_) max_node_id_ = id;
+        size_t needed = (size_t)(id + 1) * node_stride_;
+        if (needed > node_blocks_.size()) {
+            node_blocks_.resize(needed, 0);
             adj0_count_.resize(id + 1, 0);
         }
     }
-    NodeId*       adj0_ptr(NodeId id)       { return adj0_.data() + (size_t)id * cfg.M0; }
-    const NodeId* adj0_ptr(NodeId id) const { return adj0_.data() + (size_t)id * cfg.M0; }
+    void grow_adj0(NodeId id) { grow_node_block(id); }
 
-    // Vector data: flat packed array, indexed as vecs_flat_[id * dim .. (id+1)*dim).
-    // Requires NodeIds to be dense (0..max_node_id_). Gaps from deletes waste one slot
-    // (dim * sizeof(float) = 512 B for dim=128) but enable zero-indirection access:
-    //   vec_ptr(id) = vecs_flat_.data() + id * cfg.dim  ← one multiply-add, no hash lookup
-    // This makes dist_q() and graph prefetch cache-friendly.
-    std::vector<float> vecs_flat_;
+    NodeId*       adj0_ptr(NodeId id)       { return reinterpret_cast<NodeId*>(node_blocks_.data() + (size_t)id * node_stride_); }
+    const NodeId* adj0_ptr(NodeId id) const { return reinterpret_cast<const NodeId*>(node_blocks_.data() + (size_t)id * node_stride_); }
+
+    // Vector data is stored at offset cfg.M0 within each node's block.
+    // sizeof(NodeId) == sizeof(float) == sizeof(uint32_t) == 4, so the reinterpret_cast is safe.
 
     NodeId entry_point  = kInvalidNode;
     int    max_layer    = -1;
     size_t live_count   = 0;
-    NodeId max_node_id_ = 0;  // largest NodeId ever inserted; sizes vecs_flat_ and visited array
+    NodeId max_node_id_ = 0;  // largest NodeId ever inserted; sizes visited array in search_layer
     NodeId next_id_     = 0;  // next auto-assigned NodeId for insert()
 
-    float*       vec_ptr(NodeId id)       { return vecs_flat_.data() + id * cfg.dim; }
-    const float* vec_ptr(NodeId id) const { return vecs_flat_.data() + id * cfg.dim; }
+    float*       vec_ptr(NodeId id)       { return reinterpret_cast<float*>(node_blocks_.data() + (size_t)id * node_stride_ + cfg.M0); }
+    const float* vec_ptr(NodeId id) const { return reinterpret_cast<const float*>(node_blocks_.data() + (size_t)id * node_stride_ + cfg.M0); }
 
-    // Grow vecs_flat_ to accommodate id, then copy vec into its slot.
     void store_vec(NodeId id, const float* vec) {
-        size_t needed = (size_t)(id + 1) * cfg.dim;
-        if (needed > vecs_flat_.size()) {
-            vecs_flat_.resize(needed, 0.0f);
-            if (id > max_node_id_) max_node_id_ = id;
-        }
+        grow_node_block(id);
         std::memcpy(vec_ptr(id), vec, cfg.dim * sizeof(float));
     }
 
@@ -124,6 +130,7 @@ struct HnswIndex::Impl {
     explicit Impl(HnswConfig c)
         : cfg(c)
         , dc(DistanceCompute::create(c.metric))
+        , node_stride_(static_cast<size_t>(c.M0) + c.dim)
         , ml(1.0 / std::log(static_cast<double>(c.M)))
     {}
 
