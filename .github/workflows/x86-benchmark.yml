@@ -1,6 +1,10 @@
 name: Linux x86 AVX2 benchmark
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/x86-benchmark.yml
   workflow_dispatch:
     inputs:
       suite:
@@ -73,24 +77,24 @@ jobs:
           echo "$SIFT_SHA256  data/sift-128-euclidean.hdf5" | sha256sum --check
 
       - name: ANN comparison — performance mode
-        if: inputs.suite == 'ann' || inputs.suite == 'both'
+        if: github.event_name == 'push' || inputs.suite == 'ann' || inputs.suite == 'both'
         run: |
           python bench/bench_ann_compare.py \
-            --n-base "${{ inputs.n_base }}" \
-            --threads "${{ inputs.threads }}" \
-            --repeats "${{ inputs.search_repeats }}" \
-            --build-repeats "${{ inputs.build_repeats }}" \
+            --n-base "${{ inputs.n_base || '1000000' }}" \
+            --threads "${{ inputs.threads || '4' }}" \
+            --repeats "${{ inputs.search_repeats || '3' }}" \
+            --build-repeats "${{ inputs.build_repeats || '1' }}" \
             --vectordb-storage-mode performance \
             --out bench_results/linux_x86/performance
 
       - name: ANN comparison — compact mode
-        if: inputs.suite == 'ann' || inputs.suite == 'both'
+        if: github.event_name == 'push' || inputs.suite == 'ann' || inputs.suite == 'both'
         run: |
           python bench/bench_ann_compare.py \
-            --n-base "${{ inputs.n_base }}" \
-            --threads "${{ inputs.threads }}" \
-            --repeats "${{ inputs.search_repeats }}" \
-            --build-repeats "${{ inputs.build_repeats }}" \
+            --n-base "${{ inputs.n_base || '1000000' }}" \
+            --threads "${{ inputs.threads || '4' }}" \
+            --repeats "${{ inputs.search_repeats || '3' }}" \
+            --build-repeats "${{ inputs.build_repeats || '1' }}" \
             --vectordb-storage-mode compact \
             --out bench_results/linux_x86/compact
 
@@ -98,9 +102,9 @@ jobs:
         if: inputs.suite == 'storage' || inputs.suite == 'both'
         run: |
           python bench/bench_memory_latency.py \
-            --n-base "${{ inputs.n_base }}" \
-            --threads "${{ inputs.threads }}" \
-            --repeats "${{ inputs.search_repeats }}" \
+            --n-base "${{ inputs.n_base || '1000000' }}" \
+            --threads "${{ inputs.threads || '4' }}" \
+            --repeats "${{ inputs.search_repeats || '3' }}" \
             --vectordb-modes performance compact \
             --out bench_results/linux_x86/storage_tradeoff
 
