@@ -89,6 +89,8 @@ void MetadataSerializer::serialize(const MetadataIndex& idx,
         checked_write(g.fd, &e.value, sizeof(e.value));
         checked_write(g.fd, &e.id, sizeof(e.id));
     }
+    if (::fsync(g.fd) != 0)
+        throw std::runtime_error("MetadataSerializer: fsync failed: " + path);
 }
 
 // ---------------------------------------------------------------------------

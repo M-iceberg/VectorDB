@@ -54,6 +54,10 @@ struct HnswConfig {
     int    M0 = 32;             // max neighbors at layer 0 (= 2*M)
     int    ef_construction = 200;
     bool   heuristic = true;    // true = Algorithm 4 diversity heuristic; false = greedy (for comparison only)
+    // Performance mode keeps a private vector copy beside layer-0 adjacency.
+    // Compact mode stores only adjacency and reads vectors from an external
+    // contiguous source (normally VectorFile's mmap).
+    bool   store_vectors = true;
 };
 
 // HNSW approximate nearest-neighbor index.
@@ -78,6 +82,18 @@ public:
     // num_threads <= 0 means hardware_concurrency(). Returns first assigned id.
     // IDs returned are first_id, first_id+1, ..., first_id+count-1.
     NodeId insert_batch_mt(const float* vecs, size_t count, int num_threads = 0);
+
+    // Persistence path: reserve stable IDs, commit them to the WAL, then build
+    // the graph using those exact IDs. This keeps WAL publication ahead of
+    // in-memory graph mutation without sacrificing parallel construction.
+    NodeId reserve_ids(size_t count);
+    void insert_reserved_batch_mt(NodeId first_id, const float* vecs,
+                                  size_t count, int num_threads = 0);
+
+    // Supplies the contiguous [node_id * dim] vector array used when
+    // HnswConfig::store_vectors is false. The caller must refresh the pointer
+    // after remapping the backing store and keep it valid during index calls.
+    void set_external_vector_base(const float* vectors);
 
     // Returns up to k (distance, id) pairs sorted by ascending distance.
     std::vector<std::pair<float, NodeId>> search(

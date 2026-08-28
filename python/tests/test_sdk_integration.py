@@ -219,3 +219,39 @@ def test_recall_1k(tmp_path):
 
     recall = hits / Q
     assert recall >= 0.8, f"recall@1 = {recall:.2f} < 0.80"
+
+
+def test_rejects_wrong_vector_dimensions(tmp_path):
+    db = vectordb.open(str(tmp_path))
+    db.create_collection("col", dimension=DIM)
+
+    with pytest.raises(ValueError, match="dimension"):
+        db.insert("col", ids="bad", vectors=make_vecs(1, dim=DIM - 1)[0])
+    with pytest.raises(ValueError, match="dimension"):
+        db.search("col", query=make_vecs(1, dim=DIM + 1)[0])
+    with pytest.raises(ValueError, match="dimension"):
+        db.search_batch("col", queries=make_vecs(3, dim=DIM + 1))
+
+
+def test_rejects_invalid_batch_and_search_arguments(tmp_path):
+    db = vectordb.open(str(tmp_path))
+    db.create_collection("col", dimension=DIM)
+    vecs = make_vecs(2)
+
+    with pytest.raises(ValueError, match="metadatas length"):
+        db.insert("col", ids=["a", "b"], vectors=vecs,
+                  metadata=[{"tag": "only-one"}])
+    with pytest.raises(ValueError, match="duplicate user_id"):
+        db.insert("col", ids=["same", "same"], vectors=vecs)
+    with pytest.raises(ValueError, match="top_k"):
+        db.search("col", query=vecs[0], top_k=0)
+    with pytest.raises(ValueError, match="ef_search"):
+        db.search("col", query=vecs[0], ef_search=0)
+    with pytest.raises(ValueError, match="num_threads"):
+        db.search_batch("col", queries=vecs, num_threads=-1)
+
+
+def test_rejects_collection_path_traversal(tmp_path):
+    db = vectordb.open(str(tmp_path))
+    with pytest.raises(ValueError, match="collection name"):
+        db.create_collection("../outside", dimension=DIM)

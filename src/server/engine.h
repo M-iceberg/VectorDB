@@ -83,6 +83,7 @@ public:
     void create_collection(CollectionSchema schema);
     void drop_collection  (const std::string& name);
     std::vector<CollectionSchema> list_collections() const;
+    size_t collection_dimension(const std::string& name) const;
 
     // meta is optional: pass {} or omit for vectors without metadata.
     // user_id: caller-provided string ID, or empty string to auto-assign.
@@ -99,7 +100,8 @@ public:
         const std::vector<std::string>& user_ids,
         const float* vecs,
         size_t count,
-        const std::vector<MetadataEntry>& metas = {});
+        const std::vector<MetadataEntry>& metas = {},
+        int num_threads = 0);
 
     void remove(const std::string& collection, const std::string& user_id);
 

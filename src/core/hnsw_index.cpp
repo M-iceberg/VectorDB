@@ -42,10 +42,12 @@
 // -----------------------------------------------------------------------------
 #include "hnsw_index.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <queue>
 #include <random>
@@ -102,8 +104,8 @@ struct HnswIndex::Impl {
         return id < nodes_flat_.size() && nodes_flat_[id].id != kInvalidNode;
     }
 
-    // Unified per-node storage: each node occupies one contiguous block of
-    // (cfg.M0 + cfg.dim) uint32_t elements, laid out as:
+    // Performance mode uses unified per-node storage: each node occupies one
+    // contiguous block of (cfg.M0 + cfg.dim) uint32_t elements, laid out as:
     //   [adj0 neighbors: cfg.M0 × NodeId] [vector data: cfg.dim × float]
     //
     // Collocating adj0 and vec in one array means a prefetch of node n's block
@@ -111,10 +113,13 @@ struct HnswIndex::Impl {
     // vector (for dist_q). With separate arrays the two accesses were unrelated
     // random-access patterns the hardware prefetcher could not predict.
     //
-    // node_stride_ = cfg.M0 + cfg.dim  (uint32_t units; sizeof(NodeId)==sizeof(float)==4)
+    // Compact mode keeps only cfg.M0 adjacency entries here and obtains vectors
+    // from external_vectors_, normally the mmap-backed VectorFile.
+    // node_stride_ is measured in uint32_t units; NodeId and float are both 4B.
     size_t                node_stride_ = 0;
     std::vector<uint32_t> node_blocks_;
     std::vector<uint8_t>  adj0_count_;
+    const float*          external_vectors_ = nullptr;
 
     void grow_node_block(NodeId id) {
         if (id > max_node_id_) max_node_id_ = id;
@@ -128,12 +133,23 @@ struct HnswIndex::Impl {
 
     NodeId*       adj0_ptr(NodeId id)       { return reinterpret_cast<NodeId*>(node_blocks_.data() + (size_t)id * node_stride_); }
     const NodeId* adj0_ptr(NodeId id) const { return reinterpret_cast<const NodeId*>(node_blocks_.data() + (size_t)id * node_stride_); }
-    float*        vec_ptr(NodeId id)        { return reinterpret_cast<float*>(node_blocks_.data() + (size_t)id * node_stride_ + cfg.M0); }
-    const float*  vec_ptr(NodeId id) const  { return reinterpret_cast<const float*>(node_blocks_.data() + (size_t)id * node_stride_ + cfg.M0); }
+    float* internal_vec_ptr(NodeId id) {
+        return reinterpret_cast<float*>(
+            node_blocks_.data() + (size_t)id * node_stride_ + cfg.M0);
+    }
+    const float* vec_ptr(NodeId id) const {
+        if (cfg.store_vectors)
+            return reinterpret_cast<const float*>(
+                node_blocks_.data() + (size_t)id * node_stride_ + cfg.M0);
+        if (!external_vectors_)
+            throw std::logic_error("HnswIndex: compact vector source is not set");
+        return external_vectors_ + static_cast<size_t>(id) * cfg.dim;
+    }
 
     void store_vec(NodeId id, const float* vec) {
         grow_node_block(id);
-        std::memcpy(vec_ptr(id), vec, cfg.dim * sizeof(float));
+        if (cfg.store_vectors)
+            std::memcpy(internal_vec_ptr(id), vec, cfg.dim * sizeof(float));
     }
 
     // Global graph state — atomic so multi-threaded insert can read/update safely.
@@ -159,7 +175,8 @@ struct HnswIndex::Impl {
     explicit Impl(HnswConfig c)
         : cfg(c)
         , dc(DistanceCompute::create(c.metric))
-        , node_stride_(static_cast<size_t>(c.M0) + c.dim)
+        , node_stride_(static_cast<size_t>(c.M0) +
+                       (c.store_vectors ? c.dim : 0))
         , ml(1.0 / std::log(static_cast<double>(c.M)))
     {}
 
@@ -186,7 +203,8 @@ struct HnswIndex::Impl {
     //   (a) no heap allocation per call, (b) safe for concurrent callers (each
     //       thread has its own table).
     std::vector<std::pair<float, NodeId>> search_layer(
-        const float* query, NodeId ep, int ef, int layer) const
+        const float* query, NodeId ep, int ef, int layer,
+        bool concurrent_writes = false) const
     {
         using DistId = std::pair<float, NodeId>;
         auto cmp_max = [](const DistId& a, const DistId& b) { return a.first < b.first; };
@@ -222,6 +240,28 @@ struct HnswIndex::Impl {
             };
 
             if (layer == 0) {
+                // Parallel construction updates layer-0 edges in place. Fixed
+                // capacity prevents reallocations, but unsynchronised reads of
+                // adj0_count_/neighbor IDs would still be a C++ data race. Copy
+                // the published prefix under the same stripe lock used by
+                // writers. Normal query search keeps the direct, lock-free path
+                // because Engine never overlaps it with index construction.
+                if (concurrent_writes) {
+                    std::vector<NodeId> layer_nbrs;
+                    {
+                        std::lock_guard<std::mutex> lk(stripe_lock(candidate));
+                        int cnt = adj0_count_[candidate];
+                        const NodeId* nbrs = adj0_ptr(candidate);
+                        layer_nbrs.assign(nbrs, nbrs + cnt);
+                    }
+#ifndef VORTEXDB_NO_PREFETCH
+                    for (NodeId neighbor : layer_nbrs)
+                        __builtin_prefetch(vec_ptr(neighbor), 0, 0);
+#endif
+                    for (NodeId neighbor : layer_nbrs) expand(neighbor);
+                    continue;
+                }
+
                 int cnt = adj0_count_[candidate];
                 const NodeId* nbrs = adj0_ptr(candidate);
 #ifndef VORTEXDB_NO_PREFETCH
@@ -381,7 +421,7 @@ static void insert_with_id(HnswIndex::Impl& I, NodeId id, const float* vec) {
 // ---------------------------------------------------------------------------
 
 static void insert_with_id_mt(HnswIndex::Impl& I, NodeId id, const float* vec) {
-    std::memcpy(I.vec_ptr(id), vec, I.cfg.dim * sizeof(float));
+    I.store_vec(id, vec);
 
     int assigned_layer = I.assign_layer_mt();
 
@@ -420,14 +460,15 @@ static void insert_with_id_mt(HnswIndex::Impl& I, NodeId id, const float* vec) {
 
     // Phase 1: greedy descent to assigned_layer+1.
     for (int level = cur_max; level > assigned_layer; --level) {
-        auto cands = I.search_layer(vec, entry_point, 1, level);
+        auto cands = I.search_layer(vec, entry_point, 1, level, true);
         if (!cands.empty()) entry_point = cands[0].second;
     }
 
     // Phase 2: beam search + bidirectional edges.
     for (int level = std::min(assigned_layer, cur_max); level >= 0; --level) {
         int M_max  = (level == 0) ? I.cfg.M0 : I.cfg.M;
-        auto cands = I.search_layer(vec, entry_point, I.cfg.ef_construction, level);
+        auto cands = I.search_layer(
+            vec, entry_point, I.cfg.ef_construction, level, true);
         auto nbrs  = I.select_neighbors(cands, M_max);
 
         for (NodeId nbr : nbrs) {
@@ -467,6 +508,10 @@ static void insert_with_id_mt(HnswIndex::Impl& I, NodeId id, const float* vec) {
 HnswIndex::HnswIndex(HnswConfig cfg) : impl_(std::make_unique<Impl>(cfg)) {}
 HnswIndex::~HnswIndex() = default;
 
+void HnswIndex::set_external_vector_base(const float* vectors) {
+    impl_->external_vectors_ = vectors;
+}
+
 NodeId HnswIndex::insert(const float* vec) {
     auto& I  = *impl_;
     NodeId id = I.next_id_.fetch_add(1, std::memory_order_relaxed);
@@ -493,12 +538,30 @@ void HnswIndex::insert_for_recovery(NodeId id, const float* vec) {
 // spawns num_threads threads each inserting its slice. Returns the first NodeId
 // assigned (IDs are first_id, first_id+1, ..., first_id+count-1).
 NodeId HnswIndex::insert_batch_mt(const float* vecs, size_t count, int num_threads) {
-    if (count == 0) return impl_->next_id_.load();
-    auto& I = *impl_;
+    NodeId first_id = reserve_ids(count);
+    insert_reserved_batch_mt(first_id, vecs, count, num_threads);
+    return first_id;
+}
 
-    // Pre-assign IDs atomically.
-    NodeId first_id = I.next_id_.fetch_add(static_cast<NodeId>(count),
-                                            std::memory_order_relaxed);
+NodeId HnswIndex::reserve_ids(size_t count) {
+    auto& I = *impl_;
+    if (count == 0) return I.next_id_.load(std::memory_order_relaxed);
+    if (count > static_cast<size_t>(std::numeric_limits<NodeId>::max()))
+        throw std::overflow_error("HnswIndex: batch is too large");
+    NodeId amount = static_cast<NodeId>(count);
+    NodeId first_id = I.next_id_.fetch_add(amount, std::memory_order_relaxed);
+    if (first_id > std::numeric_limits<NodeId>::max() - (amount - 1)) {
+        I.next_id_.fetch_sub(amount, std::memory_order_relaxed);
+        throw std::overflow_error("HnswIndex: NodeId space exhausted");
+    }
+    return first_id;
+}
+
+void HnswIndex::insert_reserved_batch_mt(
+    NodeId first_id, const float* vecs, size_t count, int num_threads) {
+    if (count == 0) return;
+    if (!vecs) throw std::invalid_argument("HnswIndex: vectors must not be null");
+    auto& I = *impl_;
     NodeId last_id  = first_id + static_cast<NodeId>(count) - 1;
 
     // Pre-grow arrays single-threadedly to avoid resize races.
@@ -527,7 +590,6 @@ NodeId HnswIndex::insert_batch_mt(const float* vecs, size_t count, int num_threa
         }
         for (auto& t : threads) t.join();
     }
-    return first_id;
 }
 
 std::vector<std::pair<float, NodeId>> HnswIndex::search(

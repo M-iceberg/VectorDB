@@ -29,6 +29,9 @@ class VectorDB(BaseANN):
         self._metric = metric
         self._M = method_param.get("M", 16)
         self._ef_construction = method_param.get("efConstruction", 200)
+        if self._M != 16 or self._ef_construction != 200:
+            raise ValueError(
+                "VectorDB currently fixes M=16 and efConstruction=200")
         self._ef_search = 64
         self._tmpdir = None
         self._db = None
@@ -48,7 +51,8 @@ class VectorDB(BaseANN):
             end = min(start + BATCH, N)
             self._db.insert("bench",
                             ids=list(range(start, end)),
-                            vectors=X[start:end].astype(np.float32))
+                            vectors=X[start:end].astype(np.float32),
+                            num_threads=os.cpu_count() or 1)
 
     def set_query_arguments(self, ef_search: int):
         self._ef_search = ef_search
@@ -61,7 +65,10 @@ class VectorDB(BaseANN):
         return [int(r["id"]) for r in results]
 
     def batch_query(self, X: np.ndarray, n: int):
-        self.res = [self.query(q, n) for q in X]
+        rows = self._db.search_batch(
+            "bench", queries=np.asarray(X, dtype=np.float32), top_k=n,
+            ef_search=self._ef_search, num_threads=os.cpu_count() or 1)
+        self.res = [[int(result["id"]) for result in row] for row in rows]
 
     def get_batch_results(self) -> list[list[int]]:
         return self.res

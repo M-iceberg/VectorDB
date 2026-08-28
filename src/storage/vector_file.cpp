@@ -11,6 +11,7 @@
 // that triggers a remap.
 // -----------------------------------------------------------------------------
 #include "vector_file.h"
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <fcntl.h>
@@ -129,17 +130,23 @@ VectorFile::~VectorFile() = default;
 
 uint32_t VectorFile::append(const float* vec) {
     auto& I = *impl_;
+    uint32_t slot = static_cast<uint32_t>(I.header()->slot_count);
+    write(slot, vec);
+    return slot;
+}
 
-    if (I.header()->slot_count == I.header()->capacity)
+void VectorFile::write(uint32_t slot, const float* vec) {
+    if (!vec) throw std::invalid_argument("VectorFile: vector must not be null");
+    auto& I = *impl_;
+    while (slot >= I.header()->capacity)
         I.grow();
 
-    // Re-fetch header after grow() — grow() remaps the file so any pointer
-    // obtained before grow() is invalid.
+    // Re-fetch the header and data base after grow(); the mmap may have moved.
     auto* hdr = I.header();
-    uint32_t slot = static_cast<uint32_t>(hdr->slot_count);
-    std::memcpy(I.data_ptr() + slot * I.dim_, vec, I.dim_ * sizeof(float));
-    hdr->slot_count++;
-    return slot;
+    std::memcpy(I.data_ptr() + static_cast<size_t>(slot) * I.dim_,
+                vec, I.dim_ * sizeof(float));
+    hdr->slot_count = std::max<uint64_t>(hdr->slot_count,
+                                        static_cast<uint64_t>(slot) + 1);
 }
 
 const float* VectorFile::read(uint32_t slot) const {
@@ -147,8 +154,22 @@ const float* VectorFile::read(uint32_t slot) const {
     return impl_->data_ptr() + slot * impl_->dim_;
 }
 
+const float* VectorFile::data() const {
+    return impl_->data_ptr();
+}
+
 size_t VectorFile::slot_count() const {
     return static_cast<size_t>(impl_->header()->slot_count);
+}
+
+void VectorFile::sync() {
+    auto& I = *impl_;
+    const size_t populated = kHeaderSize +
+        static_cast<size_t>(I.header()->slot_count) * I.dim_ * sizeof(float);
+    if (::msync(I.map_, populated, MS_SYNC) != 0)
+        throw std::runtime_error("VectorFile: msync failed");
+    if (::fsync(I.fd) != 0)
+        throw std::runtime_error("VectorFile: fsync failed");
 }
 
 }  // namespace vectordb

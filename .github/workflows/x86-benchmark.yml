@@ -1,0 +1,117 @@
+name: Linux x86 AVX2 benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Benchmark suite to run
+        required: true
+        type: choice
+        default: ann
+        options:
+          - ann
+          - storage
+          - both
+      n_base:
+        description: Number of SIFT base vectors
+        required: true
+        default: "1000000"
+      search_repeats:
+        description: Search/latency repetitions
+        required: true
+        default: "3"
+      build_repeats:
+        description: ANN build repetitions
+        required: true
+        default: "1"
+      threads:
+        description: Explicit thread count
+        required: true
+        default: "4"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: SIFT-1M on Linux x86 / AVX2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      SIFT_SHA256: 88f00da10a4b46688a8c30e6a204975043c3b84fa1e29c796518045963c91108
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record runner hardware
+        run: |
+          uname -a | tee linux-runner.txt
+          lscpu | tee -a linux-runner.txt
+          grep -m1 '^flags' /proc/cpuinfo | tee -a linux-runner.txt
+          grep -m1 '^flags' /proc/cpuinfo | grep -qw avx2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install VectorDB and pinned benchmark dependencies
+        run: |
+          python -m pip install .
+          python -m pip install \
+            numpy==2.5.0 h5py==3.16.0 hnswlib==0.8.0 \
+            faiss-cpu==1.14.3 matplotlib==3.11.0 psutil==7.2.2
+
+      - name: Download and verify SIFT-1M
+        run: |
+          mkdir -p data
+          curl --fail --location --retry 3 \
+            https://ann-benchmarks.com/sift-128-euclidean.hdf5 \
+            --output data/sift-128-euclidean.hdf5
+          echo "$SIFT_SHA256  data/sift-128-euclidean.hdf5" | sha256sum --check
+
+      - name: ANN comparison — performance mode
+        if: inputs.suite == 'ann' || inputs.suite == 'both'
+        run: |
+          python bench/bench_ann_compare.py \
+            --n-base "${{ inputs.n_base }}" \
+            --threads "${{ inputs.threads }}" \
+            --repeats "${{ inputs.search_repeats }}" \
+            --build-repeats "${{ inputs.build_repeats }}" \
+            --vectordb-storage-mode performance \
+            --out bench_results/linux_x86/performance
+
+      - name: ANN comparison — compact mode
+        if: inputs.suite == 'ann' || inputs.suite == 'both'
+        run: |
+          python bench/bench_ann_compare.py \
+            --n-base "${{ inputs.n_base }}" \
+            --threads "${{ inputs.threads }}" \
+            --repeats "${{ inputs.search_repeats }}" \
+            --build-repeats "${{ inputs.build_repeats }}" \
+            --vectordb-storage-mode compact \
+            --out bench_results/linux_x86/compact
+
+      - name: Storage trade-off comparison
+        if: inputs.suite == 'storage' || inputs.suite == 'both'
+        run: |
+          python bench/bench_memory_latency.py \
+            --n-base "${{ inputs.n_base }}" \
+            --threads "${{ inputs.threads }}" \
+            --repeats "${{ inputs.search_repeats }}" \
+            --vectordb-modes performance compact \
+            --out bench_results/linux_x86/storage_tradeoff
+
+      - name: Upload machine-readable results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86-avx2-sift-results
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            linux-runner.txt
+            bench_results/linux_x86/**/results.json
+            bench_results/linux_x86/**/*.png

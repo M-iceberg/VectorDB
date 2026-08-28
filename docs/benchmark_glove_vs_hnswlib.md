@@ -1,5 +1,11 @@
 # Benchmark: VectorDB vs hnswlib vs faiss on GloVe-1.2M
 
+The current full-dataset run pins all systems to 18 threads, performs 200
+warm-up queries, records three search samples per operating point, and writes
+the complete environment and raw samples to
+`bench_results/glove_compare/results.json`. Build was measured once per system;
+the SIFT benchmark, not this page, is the source for repeated build claims.
+
 ## Dataset
 
 **GloVe-1.2M** (`data/glove-200-angular.hdf5`)
@@ -23,13 +29,14 @@ GloVe-1.2M is a standard dataset on [ann-benchmarks.com](https://ann-benchmarks.
 | Parameters | M=16, ef_construction=200 | M=16, ef_construction=200 | M=16, efConstruction=200 |
 | Build API | `db.insert()` in 10K batches | `index.add_items(train)` | `index.add(train_normalized)` |
 | Search API | `db.search_batch(queries=test, top_k=10)` | `index.knn_query(test, k=10)` | `index.search(test_normalized, 10)` |
-| Threads | `hardware_concurrency()` for build and search | `hardware_concurrency()` for build and search | single-threaded search |
+| Threads | 18 for build and search | 18 for build and search | 18 for build and search |
 
 All normalize vectors for cosine. faiss has no native cosine index; vectors are L2-normalized and inner product is used as proxy (identical result to cosine).
 
 ## Hardware
 
-Apple Silicon (ARM NEON), macOS. Script: `bench/bench_glove.py`.
+Apple Silicon (ARM NEON), 18 logical CPUs, macOS. Python 3.13, hnswlib 0.8.0,
+Faiss 1.14.3. Script: `bench/bench_glove.py`.
 
 ## Results
 
@@ -37,19 +44,19 @@ Apple Silicon (ARM NEON), macOS. Script: `bench/bench_glove.py`.
 
 | System | Time | Throughput |
 |--------|-----:|-----------:|
-| **VectorDB** | **78.0 s** | **15,164 vec/s** |
-| hnswlib | 88.6 s | 13,350 vec/s |
-| VectorDB advantage | **1.14× faster** | |
+| VectorDB | 81.90 s | 14,451 vec/s |
+| hnswlib | 88.08 s | 13,437 vec/s |
+| **Faiss** | **63.04 s** | **18,774 vec/s** |
 
 ### QPS vs Recall@10
 
 | ef_search | VectorDB QPS | R@10 | hnswlib QPS | R@10 | faiss QPS | R@10 |
 |----------:|-------------:|-----:|------------:|-----:|----------:|-----:|
-| 50 | 52,143 | **0.6840** | 43,403 | 0.6593 | **58,209** | 0.6733 |
-| 100 | **31,774** | **0.7654** | 25,014 | 0.7461 | 29,966 | 0.7516 |
-| 200 | **19,085** | **0.8264** | 14,189 | 0.8128 | 11,555 | 0.8147 |
-| 400 | **10,540** | **0.8731** |  7,749 | 0.8631 |  4,767 | 0.8625 |
-| 800 |  **5,953** | **0.9091** |  4,157 | 0.9018 |  2,191 | 0.8996 |
+| 50 | 50,868 | **0.6856** | 43,030 | 0.6601 | **59,748** | 0.6719 |
+| 100 | **31,385** | **0.7665** | 24,833 | 0.7458 | 30,798 | 0.7522 |
+| 200 | **18,974** | **0.8266** | 14,108 | 0.8133 | 11,595 | 0.8139 |
+| 400 | **10,982** | **0.8731** |  7,782 | 0.8638 |  4,869 | 0.8623 |
+| 800 |  **5,735** | **0.9090** |  4,205 | 0.9021 |  2,228 | 0.8996 |
 
 VectorDB leads on recall at every ef value. On QPS: faiss edges ahead at ef=50; VectorDB leads at ef≥100 and widens the gap at high ef (2.7× vs faiss at ef=800).
 

@@ -86,7 +86,9 @@ void GraphSerializer::serialize(const HnswIndex& index, const std::string& path)
                 checked_write(raw_fd, nbrs.data(), cnt * sizeof(NodeId));
         }
     }
-    // FdGuard closes raw_fd here
+    if (::fsync(raw_fd) != 0)
+        throw std::runtime_error("GraphSerializer: fsync failed: " + path);
+    // FdGuard closes raw_fd here.
 }
 
 std::unique_ptr<HnswIndex> GraphSerializer::deserialize(

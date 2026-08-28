@@ -118,10 +118,12 @@ Result:
 
 ```
  ef    VectorDB QPS    hnswlib QPS    faiss QPS
-200         42,137         27,288       18,499
+200         40,209         27,882       18,686
 ```
 
-VectorDB now beats hnswlib by 54% and faiss by 2.3× at ef=200. At ef=800, VectorDB beats faiss by 3.8×.
+Across three measured runs, VectorDB beats hnswlib by 44% and Faiss by 2.15×
+at ef=200. The full samples and environment are recorded in
+`bench_results/ann_compare/results.json`.
 
 ---
 
@@ -194,11 +196,13 @@ WAL replay is now idempotent: replaying a record for an already-present node is 
 
 ## 4. Memory vs Speed Tradeoff
 
-VectorDB uses ~2.4× more memory than hnswlib and faiss for the same index:
+Default performance mode uses ~2.5× more memory than hnswlib and Faiss for the
+same index. Compact mode removes the private vector copy and narrows the gap:
 
 | System | SIFT-1M RSS | B/vec |
 |--------|------------:|------:|
-| VectorDB | 2,017 MB | 2,115 |
+| VectorDB performance | 2,014 MB | 2,112 |
+| VectorDB compact | 1,162 MB | 1,218 |
 | hnswlib | 820 MB | 860 |
 | faiss | 822 MB | 862 |
 
@@ -239,6 +243,11 @@ hnswlib and faiss have no persistence layer. They are pure in-memory structures.
 
 ### The tradeoff in one sentence
 
-VectorDB trades ~2.4× more memory for: 1.6–1.9× lower per-query latency (vs hnswlib/faiss), crash recovery with WAL, and metadata filtering — none of which hnswlib or faiss provide.
+Performance mode trades memory for the lowest latency. Compact mode reduces
+VectorDB RSS by 42% while preserving durability and lower median P99 than both
+comparisons. In three clean-process SIFT-1M runs at ef=200, median P99 was
+0.296 ms in performance mode and 0.324 ms in compact mode, versus 0.567 ms for
+hnswlib and 0.479 ms for Faiss. Raw runs are in
+`bench_results/storage_tradeoff/results.json`.
 
 For memory-constrained environments, the `node_blocks_` layout could be separated (vectors stored externally, neighbor IDs only inline). This would halve the `node_blocks_` cost at the price of one extra pointer dereference per neighbor — recovering the same DRAM bottleneck that the current layout avoids. It is a meaningful engineering choice, not a free lunch.

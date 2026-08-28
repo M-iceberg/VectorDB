@@ -1,4 +1,4 @@
-# VortexDB API Reference
+# VectorDB API Reference
 
 ---
 

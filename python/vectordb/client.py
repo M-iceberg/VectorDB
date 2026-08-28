@@ -41,7 +41,8 @@ class VectorDB:
     # ------------------------------------------------------------------
     def insert(self, collection: str, *, vectors,
                ids=None,
-               metadata: Optional[Union[Dict, List[Dict]]] = None) -> List[str]:
+               metadata: Optional[Union[Dict, List[Dict]]] = None,
+               num_threads: int = 0) -> List[str]:
         # Normalise vectors to 2-D float32 array
         vectors = np.asarray(vectors, dtype=np.float32)
         if vectors.ndim == 1:
@@ -70,7 +71,7 @@ class VectorDB:
 
         # Single batch call: one fdatasync for the whole batch instead of one per vector.
         assigned = self._engine.insert_batch(
-            collection, ids_list, vectors, metas)
+            collection, ids_list, vectors, metas, num_threads)
         return assigned
 
     # ------------------------------------------------------------------
@@ -115,5 +116,5 @@ class VectorDB:
 
 
 def open(data_dir: str) -> VectorDB:
-    """Open (or create) a VortexDB database. Returns a VectorDB instance."""
+    """Open (or create) a VectorDB database. Returns a VectorDB instance."""
     return VectorDB(data_dir)

@@ -190,5 +190,34 @@ TEST_F(VectorFileTest, AppendAfterReopen) {
     for (size_t d = 0; d < dim; ++d) EXPECT_FLOAT_EQ(vf.read(2)[d], v2[d]);
 }
 
+TEST_F(VectorFileTest, StableSlotWriteSupportsOverwriteAndGrowth) {
+    const size_t dim = 4;
+    std::vector<float> initial = {1, 2, 3, 4};
+    std::vector<float> updated = {5, 6, 7, 8};
+    std::vector<float> distant = {9, 10, 11, 12};
+
+    {
+        VectorFile vf(path_, dim);
+        vf.write(0, initial.data());
+        vf.write(0, updated.data());
+        vf.write(2048, distant.data());  // forces multiple mmap growth steps
+        vf.sync();
+        EXPECT_EQ(vf.slot_count(), 2049u);
+        EXPECT_EQ(vf.data(), vf.read(0));
+    }
+
+    VectorFile vf(path_, dim);
+    ASSERT_EQ(vf.slot_count(), 2049u);
+    for (size_t d = 0; d < dim; ++d) {
+        EXPECT_FLOAT_EQ(vf.read(0)[d], updated[d]);
+        EXPECT_FLOAT_EQ(vf.read(2048)[d], distant[d]);
+    }
+}
+
+TEST_F(VectorFileTest, RejectsNullStableSlotWrite) {
+    VectorFile vf(path_, 4);
+    EXPECT_THROW(vf.write(0, nullptr), std::invalid_argument);
+}
+
 }  // namespace
 }  // namespace vectordb

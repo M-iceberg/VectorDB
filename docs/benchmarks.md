@@ -1,5 +1,13 @@
 # Benchmarks
 
+> **Historical optimization notebook.** Sections below preserve individual
+> profiling and pre-harness runs and are not the source for current headline
+> claims. Current repeated SIFT-1M results live in the
+> [raw manifest](../bench_results/ann_compare/results.json) and the
+> [reproducible comparison](benchmark_sift1m_vs_hnswlib.md). Do not combine
+> numbers from different sections: thread count, call path, code revision, and
+> repetition methodology changed during development.
+
 ## SIMD Profiling — Search Hotspot Analysis (Day 27)
 
 **Setup:** dim=128, N=100K, ef=200, HNSW M=16, L2 metric  
@@ -331,7 +339,11 @@ See `docs/benchmark_sift1m_vs_hnswlib.md`, `docs/benchmark_glove_vs_hnswlib.md` 
 
 ## Memory Usage and Per-Query Latency — SIFT-1M
 
-**Setup:** SIFT-1M, M=16, ef_construction=200, ef_search=200. Each implementation measured in a fresh subprocess (no RSS cross-contamination). Latency = single-threaded one-query-at-a-time, 2,000 queries after 200 warmup. Script: `bench/bench_memory_latency.py`.
+**Setup:** SIFT-1M, M=16, ef_construction=200, ef_search=200. Each implementation
+was measured in a fresh subprocess three times (no RSS cross-contamination).
+Latency = single-threaded one-query-at-a-time, 2,000 queries after 200 warmup.
+The table reports medians. Script: `bench/bench_memory_latency.py`; raw runs:
+`bench_results/storage_tradeoff/results.json`.
 
 Raw vector data (no index): **488 MB** (512 B/vec, 1M × 128D × float32).
 
@@ -339,20 +351,26 @@ Raw vector data (no index): **488 MB** (512 B/vec, 1M × 128D × float32).
 
 | System | Index RSS | B/vec | vs raw vectors |
 |--------|----------:|------:|---------------:|
-| VectorDB | **2,017 MB** | 2,115 | **4.1×** |
+| VectorDB performance | 2,014 MB | 2,112 | 4.1× |
+| VectorDB compact | **1,162 MB** | 1,218 | **2.4×** |
 | hnswlib | 820 MB | 860 | 1.7× |
 | faiss | 822 MB | 862 | 1.7× |
 
-VectorDB uses ~2.4× more memory than hnswlib/faiss. The extra cost comes from collocating neighbor IDs and vector data in `node_blocks_` (each node stores M0=32 neighbor IDs + the full 128D vector inline), plus a separately mmap'd `VectorFile` (needed for WAL recovery). hnswlib and faiss store vectors once; VectorDB stores them twice — once in `node_blocks_` for fast search, once in `VectorFile` for durability.
+Performance mode uses ~2.5× more memory than hnswlib/Faiss because it stores
+vectors in both `node_blocks_` and the durable mmap `VectorFile`. Compact mode
+removes the `node_blocks_` vector copy and reduces VectorDB RSS by 42%.
 
 ### Per-query latency (single-threaded, ef=200)
 
 | System | P50 | P95 | P99 |
 |--------|----:|----:|----:|
-| VectorDB | **0.24 ms** | **0.28 ms** | **0.30 ms** |
-| faiss | 0.39 ms | 0.46 ms | 0.49 ms |
-| hnswlib | 0.45 ms | 0.53 ms | 0.57 ms |
+| VectorDB performance | **0.238 ms** | **0.280 ms** | **0.296 ms** |
+| VectorDB compact | 0.259 ms | 0.307 ms | 0.324 ms |
+| faiss | 0.387 ms | 0.456 ms | 0.479 ms |
+| hnswlib | 0.452 ms | 0.533 ms | 0.567 ms |
 
-VectorDB is **1.6–1.9× lower latency** than hnswlib and **1.6–1.7×** lower than faiss per single query. The P99/P50 ratio is tight (1.25× for VectorDB vs 1.27× for hnswlib) — no latency spikes from the parallel batch implementation.
+Compact mode retains lower median P99 than both comparisons while substantially
+reducing RSS. One compact run reached 0.529 ms P99; the manifest retains that
+run rather than reporting only the best result.
 
 The single-query latency advantage comes from the same sources as the QPS advantage: collocated memory layout and prefetching reduce DRAM round-trips per query. At ef=200 the graph is large enough that memory access dominates over compute.

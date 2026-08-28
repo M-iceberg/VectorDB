@@ -43,8 +43,11 @@ public:
     ~VectorFile();
 
     uint32_t      append(const float* vec);       // returns the assigned slot index
+    void          write(uint32_t slot, const float* vec); // insert or overwrite a stable NodeId slot
     const float*  read(uint32_t slot) const;      // zero-copy pointer into mmap region
+    const float*  data() const;                   // contiguous slot-0 base; invalidated by a growing write
     size_t        slot_count() const;
+    void          sync();                         // persist header and populated slots
 
     VectorFile(const VectorFile&) = delete;
     VectorFile& operator=(const VectorFile&) = delete;

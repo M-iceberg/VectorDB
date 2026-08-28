@@ -17,10 +17,14 @@ python/vectordb/_vectordb*.so
 python/vectordb/__pycache__/
 python/__pycache__/
 python/tests/__pycache__/
+__pycache__/
 
 # Benchmark run artifacts (db files created during benchmark execution)
 bench_results/*/db/
 bench_results/*/*/db/
+bench_results/*/vdb/
+bench_results/*/vdb-build-*/
+bench_results/*/data.pkl
 
 # HDF5 dataset files
 *.h5

@@ -2,7 +2,9 @@
 #include "server/engine.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
+#include <fcntl.h>
 #include <random>
 #include <signal.h>
 #include <sys/wait.h>
@@ -11,6 +13,26 @@
 
 namespace vectordb {
 namespace {
+
+class ScopedStorageMode {
+public:
+    explicit ScopedStorageMode(const char* mode) {
+        if (const char* current = std::getenv("VECTORDB_STORAGE_MODE")) {
+            had_previous_ = true;
+            previous_ = current;
+        }
+        ::setenv("VECTORDB_STORAGE_MODE", mode, 1);
+    }
+    ~ScopedStorageMode() {
+        if (had_previous_)
+            ::setenv("VECTORDB_STORAGE_MODE", previous_.c_str(), 1);
+        else
+            ::unsetenv("VECTORDB_STORAGE_MODE");
+    }
+private:
+    bool had_previous_ = false;
+    std::string previous_;
+};
 
 class EngineRecoveryTest : public ::testing::Test {
 protected:
@@ -368,6 +390,129 @@ TEST_F(EngineRecoveryTest, CrashRecoveryViaKill) {
     EXPECT_EQ(results.size(), N + M);
 }
 
+// Crash at every checkpoint publication boundary. The previous manifest plus
+// WAL, or the newly published manifest, must always describe a recoverable
+// state; no destructor is allowed to run in the child.
+TEST_F(EngineRecoveryTest, AtomicCheckpointSurvivesEveryPublishPhase) {
+    constexpr size_t dim = 16;
+    constexpr size_t N = 60;
+    constexpr size_t M = 30;
+    const std::vector<std::string> phases = {
+        "after_snapshot_write",
+        "after_snapshot_publish",
+        "after_manifest_publish",
+        "after_wal_truncate",
+    };
+
+    std::mt19937 rng(4242);
+    std::vector<std::vector<float>> vecs(N + M, std::vector<float>(dim));
+    for (auto& vec : vecs) vec = random_vec(dim, rng);
+
+    for (const auto& phase : phases) {
+        std::string case_dir = data_dir_ + "/" + phase;
+        std::filesystem::create_directories(case_dir);
+        {
+            Engine engine(case_dir);
+            engine.create_collection(make_schema(dim));
+            for (uint32_t i = 0; i < N; ++i)
+                engine.insert("test", std::to_string(i), vecs[i].data());
+            engine.checkpoint("test");
+            for (uint32_t i = N; i < N + M; ++i)
+                engine.insert("test", std::to_string(i), vecs[i].data());
+        }
+
+        pid_t pid = ::fork();
+        ASSERT_GE(pid, 0);
+        if (pid == 0) {
+            ::setenv("VECTORDB_CHECKPOINT_FAILPOINT", phase.c_str(), 1);
+            Engine engine(case_dir);
+            engine.checkpoint("test");
+            ::_exit(0);  // failpoint should have SIGKILLed us first
+        }
+
+        int status = 0;
+        ASSERT_EQ(::waitpid(pid, &status, 0), pid);
+        ASSERT_TRUE(WIFSIGNALED(status)) << "phase=" << phase;
+        EXPECT_EQ(WTERMSIG(status), SIGKILL) << "phase=" << phase;
+
+        Engine recovered(case_dir);
+        auto results = recovered.search(
+            {"test", vecs[0].data(), static_cast<int>(N + M), 200});
+        EXPECT_EQ(results.size(), N + M) << "phase=" << phase;
+    }
+}
+
+TEST_F(EngineRecoveryTest, CorruptPublishedSnapshotIsRejected) {
+    constexpr size_t dim = 8;
+    std::mt19937 rng(5150);
+    {
+        Engine engine(data_dir_);
+        engine.create_collection(make_schema(dim));
+        for (uint32_t i = 0; i < 20; ++i) {
+            auto vec = random_vec(dim, rng);
+            engine.insert("test", std::to_string(i), vec.data());
+        }
+        engine.checkpoint("test");
+    }
+
+    std::filesystem::path graph_path;
+    for (const auto& entry : std::filesystem::directory_iterator(data_dir_ + "/test")) {
+        std::string name = entry.path().filename().string();
+        if (entry.is_directory() && name.rfind("checkpoint-", 0) == 0) {
+            graph_path = entry.path() / "graph.bin";
+            break;
+        }
+    }
+    ASSERT_FALSE(graph_path.empty());
+
+    int fd = ::open(graph_path.c_str(), O_RDWR);
+    ASSERT_GE(fd, 0);
+    uint8_t byte = 0;
+    ASSERT_EQ(::pread(fd, &byte, 1, 40), 1);
+    byte ^= 0xFFu;
+    ASSERT_EQ(::pwrite(fd, &byte, 1, 40), 1);
+    ASSERT_EQ(::fsync(fd), 0);
+    ::close(fd);
+
+    EXPECT_THROW({ Engine recovered(data_dir_); }, std::runtime_error);
+}
+
+TEST_F(EngineRecoveryTest, WalCommitPrecedesBatchGraphMutation) {
+    constexpr size_t dim = 16;
+    constexpr size_t count = 80;
+    std::mt19937 rng(6161);
+    std::vector<float> vecs(count * dim);
+    std::vector<std::string> ids(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        auto vec = random_vec(dim, rng);
+        std::copy(vec.begin(), vec.end(), vecs.begin() + i * dim);
+        ids[i] = std::to_string(i);
+    }
+    {
+        Engine engine(data_dir_);
+        engine.create_collection(make_schema(dim));
+    }
+
+    pid_t pid = ::fork();
+    ASSERT_GE(pid, 0);
+    if (pid == 0) {
+        ::setenv("VECTORDB_INSERT_FAILPOINT", "after_wal_sync", 1);
+        Engine engine(data_dir_);
+        engine.insert_batch("test", ids, vecs.data(), count, {}, 4);
+        ::_exit(0);
+    }
+
+    int status = 0;
+    ASSERT_EQ(::waitpid(pid, &status, 0), pid);
+    ASSERT_TRUE(WIFSIGNALED(status));
+    EXPECT_EQ(WTERMSIG(status), SIGKILL);
+
+    Engine recovered(data_dir_);
+    auto results = recovered.search(
+        {"test", vecs.data(), static_cast<int>(count), 200});
+    EXPECT_EQ(results.size(), count);
+}
+
 // ---------------------------------------------------------------------------
 // Search with top_k > number of nodes returns what's available, not top_k.
 // ---------------------------------------------------------------------------
@@ -388,6 +533,65 @@ TEST_F(EngineRecoveryTest, SearchTopKExceedsNodeCount) {
     std::vector<float> q = random_vec(dim, rng);
     auto results = engine.search({"test", q.data(), 10, 50});
     EXPECT_EQ(results.size(), N);  // only 3 nodes exist, must return 3 not 10
+}
+
+TEST_F(EngineRecoveryTest, CompactStorageSurvivesCheckpointAndReopen) {
+    ScopedStorageMode compact("compact");
+    constexpr size_t dim = 16;
+    constexpr size_t count = 256;
+    std::mt19937 rng(9090);
+    std::vector<float> vecs(count * dim);
+    std::vector<std::string> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        auto vec = random_vec(dim, rng);
+        std::copy(vec.begin(), vec.end(), vecs.begin() + i * dim);
+        ids[i] = "compact-" + std::to_string(i);
+    }
+
+    {
+        Engine engine(data_dir_);
+        engine.create_collection(make_schema(dim));
+        engine.insert_batch("test", ids, vecs.data(), count, {}, 4);
+        auto result = engine.search(
+            {"test", vecs.data() + 77 * dim, 1, 100});
+        ASSERT_EQ(result.size(), 1u);
+        EXPECT_EQ(result[0].user_id, ids[77]);
+        engine.checkpoint("test");
+    }
+
+    Engine reopened(data_dir_);
+    auto result = reopened.search(
+        {"test", vecs.data() + 177 * dim, 1, 100});
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0].user_id, ids[177]);
+}
+
+TEST_F(EngineRecoveryTest, CheckpointCanSwitchStorageModesOnReopen) {
+    constexpr size_t dim = 16;
+    std::mt19937 rng(9191);
+    auto vec = random_vec(dim, rng);
+
+    {
+        ScopedStorageMode performance("performance");
+        Engine engine(data_dir_);
+        engine.create_collection(make_schema(dim));
+        engine.insert("test", "mode-switch", vec.data());
+        engine.checkpoint("test");
+    }
+    {
+        ScopedStorageMode compact("compact");
+        Engine engine(data_dir_);
+        auto result = engine.search({"test", vec.data(), 1, 50});
+        ASSERT_EQ(result.size(), 1u);
+        EXPECT_EQ(result[0].user_id, "mode-switch");
+    }
+    {
+        ScopedStorageMode performance("performance");
+        Engine engine(data_dir_);
+        auto result = engine.search({"test", vec.data(), 1, 50});
+        ASSERT_EQ(result.size(), 1u);
+        EXPECT_EQ(result[0].user_id, "mode-switch");
+    }
 }
 
 // ---------------------------------------------------------------------------

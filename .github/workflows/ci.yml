@@ -68,6 +68,8 @@ jobs:
         run: |
           pytest python/test_bindings.py -v
           pytest python/tests/test_sdk_integration.py -v
+          VECTORDB_STORAGE_MODE=compact pytest python/test_bindings.py -v
+          VECTORDB_STORAGE_MODE=compact pytest python/tests/test_sdk_integration.py -v
 
   # -------------------------------------------------------------------------
   # Memory profiling: /usr/bin/time -v + Valgrind massif (x86 Linux)
@@ -285,3 +287,31 @@ jobs:
           ./build/tests/unit/test_engine_full_flow_int
           ./build/tests/unit/test_concurrency_int
           ./build/tests/unit/test_e2e_int
+
+  # -------------------------------------------------------------------------
+  # ThreadSanitizer: focused parallel HNSW construction coverage.
+  # -------------------------------------------------------------------------
+  thread-sanitizer:
+    name: ThreadSanitizer (parallel HNSW insert)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Configure
+        run: |
+          cmake -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+
+      - name: Build focused test
+        run: cmake --build build-tsan --target test_hnsw_ut
+
+      - name: Run parallel insert test under ThreadSanitizer
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          ./build-tsan/tests/unit/test_hnsw_ut \
+            '--gtest_filter=HnswParallelInsert.BatchConstructionMaintainsGraphInvariants:HnswCompactStorage.*'

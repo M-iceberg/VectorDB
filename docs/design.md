@@ -1,4 +1,4 @@
-# VortexDB — System Design
+# VectorDB — System Design
 
 A vector database built from scratch. This document covers the architecture, key design decisions, and trade-offs.
 

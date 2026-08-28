@@ -5,7 +5,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "vectordb"
 version = "0.1.0"
-description = "VortexDB: high-performance vector search engine"
+description = "VectorDB: persistent C++ HNSW vector search engine"
 requires-python = ">=3.8"
 dependencies = ["numpy"]
 

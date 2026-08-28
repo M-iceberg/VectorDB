@@ -1,19 +1,18 @@
-"""
-Head-to-head: VectorDB vs hnswlib vs faiss on SIFT-1M.
+"""Reproducible SIFT ANN comparison: VectorDB vs hnswlib vs Faiss.
 
-Runs all on the same machine with identical M / ef_construction parameters,
-sweeps ef_search, and plots the QPS vs Recall@10 trade-off curve — the same
-metric used by ann-benchmarks.com.
-
-Requirements:
-    pip install hnswlib faiss-cpu h5py matplotlib
-
-Usage:
-    python bench/bench_ann_compare.py [--data data/sift-128-euclidean.hdf5]
+The benchmark pins an explicit thread count, warms every search path, records
+all timing samples, and atomically writes a machine-readable results manifest.
+QPS is reported as the median of repeated full-query runs.
 """
 import argparse
+import datetime as dt
+import importlib.metadata
+import json
 import os
+import platform
 import shutil
+import statistics
+import subprocess
 import sys
 import time
 
@@ -28,14 +27,12 @@ try:
     HAS_HNSWLIB = True
 except ImportError:
     HAS_HNSWLIB = False
-    print("hnswlib not installed — skipping hnswlib.  pip install hnswlib\n")
 
 try:
     import faiss
     HAS_FAISS = True
 except ImportError:
     HAS_FAISS = False
-    print("faiss not installed — skipping faiss.  pip install faiss-cpu\n")
 
 try:
     import matplotlib
@@ -46,235 +43,355 @@ except ImportError:
     HAS_MATPLOTLIB = False
 
 
-# ann-benchmarks primary metric: recall@10
-# "fraction of true top-10 neighbors found in returned top-10"
-def recall_at_10(returned: list[list], gt: np.ndarray) -> float:
-    total = found = 0
-    for i, res in enumerate(returned):
-        true_top10 = set(gt[i, :10].tolist())
-        total += len(true_top10)
-        found += len(true_top10 & set(res[:10]))
-    return found / total if total > 0 else 0.0
+def recall_at_10(returned, gt):
+    found = 0
+    total = 0
+    for i, result in enumerate(returned):
+        expected = set(gt[i, :10].tolist())
+        found += len(expected & set(result[:10]))
+        total += len(expected)
+    return found / total if total else 0.0
 
 
-def load_sift(path, n_base, n_queries):
-    with h5py.File(path, "r") as f:
-        train = f["train"][:n_base].astype(np.float32)
-        test  = f["test"][:n_queries].astype(np.float32)
-        gt    = f["neighbors"][:n_queries]
-    return train, test, gt
+def exact_l2_ground_truth(train, test, k=10):
+    """Compute valid ground truth when benchmarking a dataset subset."""
+    if HAS_FAISS:
+        exact = faiss.IndexFlatL2(train.shape[1])
+        exact.add(train)
+        return exact.search(test, k)[1]
+
+    neighbors = np.empty((len(test), k), dtype=np.int64)
+    train_norm = np.sum(train * train, axis=1)
+    for start in range(0, len(test), 128):
+        queries = test[start:start + 128]
+        distances = (np.sum(queries * queries, axis=1, keepdims=True) +
+                     train_norm[None, :] - 2.0 * queries @ train.T)
+        candidates = np.argpartition(distances, k - 1, axis=1)[:, :k]
+        candidate_distances = np.take_along_axis(distances, candidates, axis=1)
+        order = np.argsort(candidate_distances, axis=1)
+        neighbors[start:start + len(queries)] = np.take_along_axis(
+            candidates, order, axis=1)
+    return neighbors
 
 
-# ---------------------------------------------------------------------------
-# VectorDB
-# ---------------------------------------------------------------------------
+def summary(samples):
+    values = [float(v) for v in samples]
+    return {
+        "samples": values,
+        "median": statistics.median(values),
+        "min": min(values),
+        "max": max(values),
+    }
 
-def run_vectordb(train, test, gt, ef_values, M, ef_construction, out_dir):
-    N, dim = train.shape
-    db_dir = os.path.join(out_dir, "vdb")
-    shutil.rmtree(db_dir, ignore_errors=True)
 
-    db = vectordb.open(db_dir)
-    db.create_collection("sift", dimension=dim, metric="l2")
+def package_version(distribution):
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
-    print("  [VectorDB] building index ...")
-    t0 = time.perf_counter()
-    BATCH = 10_000
-    for start in range(0, N, BATCH):
-        end = min(start + BATCH, N)
-        db.insert("sift", ids=list(range(start, end)), vectors=train[start:end])
-    build_sec = time.perf_counter() - t0
-    print(f"  [VectorDB] build: {build_sec:.1f}s  ({N/build_sec:,.0f} vec/s)")
 
+def git_sha():
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True,
+            stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def git_dirty():
+    try:
+        return bool(subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            text=True, stderr=subprocess.DEVNULL).strip())
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def compiler_version():
+    try:
+        return subprocess.check_output(
+            [os.environ.get("CXX", "c++"), "--version"], text=True,
+            stderr=subprocess.STDOUT).splitlines()[0]
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def cpu_details():
+    """Return enough CPU identity/SIMD data to audit cross-machine results."""
+    details = {"model": "unknown", "flags": []}
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/cpuinfo", encoding="utf-8") as handle:
+                fields = {}
+                for line in handle:
+                    if not line.strip():
+                        break
+                    if ":" in line:
+                        key, value = line.split(":", 1)
+                        fields[key.strip()] = value.strip()
+            details["model"] = fields.get("model name", fields.get("Processor", "unknown"))
+            details["flags"] = fields.get("flags", fields.get("Features", "")).split()
+        except OSError:
+            pass
+    elif sys.platform == "darwin":
+        try:
+            details["model"] = subprocess.check_output(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], text=True,
+                stderr=subprocess.DEVNULL).strip()
+        except (OSError, subprocess.CalledProcessError):
+            details["model"] = platform.processor() or "unknown"
+    return details
+
+
+def environment_manifest():
+    manifest = {
+        "timestamp_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "git_sha": git_sha(),
+        "git_dirty": git_dirty(),
+        "command": sys.argv,
+        "compiler": compiler_version(),
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": platform.processor(),
+        "logical_cpus": os.cpu_count(),
+        "numpy": np.__version__,
+        "vectordb": package_version("vectordb"),
+        "hnswlib": package_version("hnswlib") if HAS_HNSWLIB else None,
+        "faiss": package_version("faiss-cpu") if HAS_FAISS else None,
+    }
+    manifest["cpu"] = cpu_details()
+    return manifest
+
+
+def atomic_json_dump(path, payload):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def timed_search(search_fn, convert_fn, test, gt, ef_values, repeats, warmup):
     rows = []
-    Q = len(test)
+    warmup_queries = test[:min(warmup, len(test))]
     for ef in ef_values:
-        t0 = time.perf_counter()
-        batch = db.search_batch("sift", queries=test, top_k=10, ef_search=ef)
-        elapsed = time.perf_counter() - t0
-        returned = [[int(r["id"]) for r in row] for row in batch]
-        qps = Q / elapsed
-        rec = recall_at_10(returned, gt)
-        rows.append((ef, qps, rec))
-        print(f"  [VectorDB] ef={ef:>4}  QPS={qps:>7,.0f}  Recall@10={rec:.4f}")
+        search_fn(warmup_queries, ef)
+        elapsed_samples = []
+        returned = None
+        for _ in range(repeats):
+            started = time.perf_counter()
+            raw = search_fn(test, ef)
+            elapsed_samples.append(time.perf_counter() - started)
+            returned = convert_fn(raw)
+        qps_samples = [len(test) / elapsed for elapsed in elapsed_samples]
+        recall = recall_at_10(returned, gt)
+        row = {
+            "ef_search": ef,
+            "qps": summary(qps_samples),
+            "elapsed_seconds": summary(elapsed_samples),
+            "recall_at_10": recall,
+        }
+        rows.append(row)
+        print(f"    ef={ef:>4}  median QPS={row['qps']['median']:>9,.0f}  "
+              f"range=[{row['qps']['min']:,.0f}, {row['qps']['max']:,.0f}]  "
+              f"R@10={recall:.4f}")
+    return rows
 
-    return build_sec, rows
+
+def run_vectordb(train, test, gt, args):
+    n, dim = train.shape
+    build_samples = []
+    db = None
+    os.environ["VECTORDB_STORAGE_MODE"] = args.vectordb_storage_mode
+    print(f"  [VectorDB/{args.vectordb_storage_mode}] building index")
+    for repeat in range(args.build_repeats):
+        db_dir = os.path.join(args.out, "db", f"vdb-build-{repeat}")
+        shutil.rmtree(db_dir, ignore_errors=True)
+        db = vectordb.open(db_dir)
+        db.create_collection("sift", dimension=dim, metric="l2")
+        started = time.perf_counter()
+        for start in range(0, n, args.batch_size):
+            end = min(start + args.batch_size, n)
+            db.insert("sift", ids=list(range(start, end)),
+                      vectors=train[start:end], num_threads=args.threads)
+        elapsed = time.perf_counter() - started
+        build_samples.append(elapsed)
+        print(f"    repeat {repeat + 1}: {elapsed:.3f}s ({n / elapsed:,.0f} vec/s)")
+        if repeat + 1 < args.build_repeats:
+            del db
+            shutil.rmtree(db_dir, ignore_errors=True)
+
+    rows = timed_search(
+        lambda queries, ef: db.search_batch(
+            "sift", queries=queries, top_k=10, ef_search=ef,
+            num_threads=args.threads),
+        lambda batch: [[int(result["id"]) for result in row] for row in batch],
+        test, gt, args.ef_values, args.repeats, args.warmup_queries)
+    return {"build_seconds": summary(build_samples), "search": rows}
 
 
-# ---------------------------------------------------------------------------
-# hnswlib
-# ---------------------------------------------------------------------------
-
-def run_hnswlib(train, test, gt, ef_values, M, ef_construction):
+def run_hnswlib(train, test, gt, args):
     if not HAS_HNSWLIB:
-        return None, []
+        return None
+    n, dim = train.shape
+    build_samples = []
+    index = None
+    print("  [hnswlib] building index")
+    for repeat in range(args.build_repeats):
+        index = hnswlib.Index(space="l2", dim=dim)
+        index.init_index(max_elements=n, ef_construction=args.ef_construction,
+                         M=args.M)
+        index.set_num_threads(args.threads)
+        started = time.perf_counter()
+        index.add_items(train, np.arange(n), num_threads=args.threads)
+        elapsed = time.perf_counter() - started
+        build_samples.append(elapsed)
+        print(f"    repeat {repeat + 1}: {elapsed:.3f}s ({n / elapsed:,.0f} vec/s)")
 
-    N, dim = train.shape
-    print("  [hnswlib]  building index ...")
-    index = hnswlib.Index(space="l2", dim=dim)
-
-    t0 = time.perf_counter()
-    index.init_index(max_elements=N, ef_construction=ef_construction, M=M)
-    index.add_items(train, list(range(N)))
-    build_sec = time.perf_counter() - t0
-    print(f"  [hnswlib]  build: {build_sec:.1f}s  ({N/build_sec:,.0f} vec/s)")
-
-    rows = []
-    Q = len(test)
-    for ef in ef_values:
-        index.set_ef(ef)
-        t0 = time.perf_counter()
-        labels, _ = index.knn_query(test, k=10)
-        elapsed = time.perf_counter() - t0
-        qps = Q / elapsed
-        rec = recall_at_10(labels.tolist(), gt)
-        rows.append((ef, qps, rec))
-        print(f"  [hnswlib]  ef={ef:>4}  QPS={qps:>7,.0f}  Recall@10={rec:.4f}")
-
-    return build_sec, rows
+    rows = timed_search(
+        lambda queries, ef: (
+            index.set_ef(ef),
+            index.knn_query(queries, k=10, num_threads=args.threads)[0]
+        )[1],
+        lambda labels: labels.tolist(), test, gt, args.ef_values,
+        args.repeats, args.warmup_queries)
+    return {"build_seconds": summary(build_samples), "search": rows}
 
 
-# ---------------------------------------------------------------------------
-# faiss (IndexHNSWFlat, L2)
-# ---------------------------------------------------------------------------
-
-def run_faiss(train, test, gt, ef_values, M, ef_construction):
+def run_faiss(train, test, gt, args):
     if not HAS_FAISS:
-        return None, []
+        return None
+    n, dim = train.shape
+    faiss.omp_set_num_threads(args.threads)
+    build_samples = []
+    index = None
+    print("  [Faiss] building index")
+    for repeat in range(args.build_repeats):
+        index = faiss.IndexHNSWFlat(dim, args.M)
+        index.hnsw.efConstruction = args.ef_construction
+        started = time.perf_counter()
+        index.add(train)
+        elapsed = time.perf_counter() - started
+        build_samples.append(elapsed)
+        print(f"    repeat {repeat + 1}: {elapsed:.3f}s ({n / elapsed:,.0f} vec/s)")
 
-    N, dim = train.shape
-    print("  [faiss]    building index ...")
-    index = faiss.IndexHNSWFlat(dim, M)
-    index.hnsw.efConstruction = ef_construction
-
-    t0 = time.perf_counter()
-    index.add(train)
-    build_sec = time.perf_counter() - t0
-    print(f"  [faiss]    build: {build_sec:.1f}s  ({N/build_sec:,.0f} vec/s)")
-
-    rows = []
-    Q = len(test)
-    for ef in ef_values:
-        index.hnsw.efSearch = ef
-        t0 = time.perf_counter()
-        _, labels = index.search(test, 10)
-        elapsed = time.perf_counter() - t0
-        qps = Q / elapsed
-        rec = recall_at_10(labels.tolist(), gt)
-        rows.append((ef, qps, rec))
-        print(f"  [faiss]    ef={ef:>4}  QPS={qps:>7,.0f}  Recall@10={rec:.4f}")
-
-    return build_sec, rows
+    rows = timed_search(
+        lambda queries, ef: (
+            setattr(index.hnsw, "efSearch", ef),
+            index.search(queries, 10)[1]
+        )[1],
+        lambda labels: labels.tolist(), test, gt, args.ef_values,
+        args.repeats, args.warmup_queries)
+    return {"build_seconds": summary(build_samples), "search": rows}
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def plot_results(path, systems, args, n, dim):
+    if not HAS_MATPLOTLIB:
+        return
+    fig, ax = plt.subplots(figsize=(8, 5))
+    styles = {
+        "VectorDB": ("o-", "tab:blue"),
+        "hnswlib": ("s-", "tab:orange"),
+        "Faiss": ("^-", "tab:green"),
+    }
+    for name, result in systems.items():
+        if result is None:
+            continue
+        rows = result["search"]
+        style, color = styles[name]
+        ax.plot([row["recall_at_10"] for row in rows],
+                [row["qps"]["median"] for row in rows],
+                style, color=color, label=name)
+    ax.set_xlabel("Recall@10")
+    ax.set_ylabel("Median QPS")
+    ax.set_title(
+        f"SIFT ANN comparison (M={args.M}, efConstruction={args.ef_construction}, "
+        f"threads={args.threads})\n{n:,} vectors, dim={dim}, {args.repeats} search runs")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data",           default="data/sift-128-euclidean.hdf5")
-    parser.add_argument("--n-base",         type=int, default=1_000_000)
-    parser.add_argument("--n-queries",      type=int, default=10_000)
-    parser.add_argument("--M",              type=int, default=16)
-    parser.add_argument("--ef-construction",type=int, default=200)
-    parser.add_argument("--out",            default="bench_results/ann_compare")
+    parser.add_argument("--data", default="data/sift-128-euclidean.hdf5")
+    parser.add_argument("--n-base", type=int, default=1_000_000)
+    parser.add_argument("--n-queries", type=int, default=10_000)
+    parser.add_argument("--M", type=int, default=16)
+    parser.add_argument("--ef-construction", type=int, default=200)
+    parser.add_argument("--ef-values", type=int, nargs="+",
+                        default=[50, 100, 200, 400, 800])
+    parser.add_argument("--threads", type=int, default=os.cpu_count() or 1)
+    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--build-repeats", type=int, default=1)
+    parser.add_argument("--warmup-queries", type=int, default=200)
+    parser.add_argument("--batch-size", type=int, default=10_000)
+    parser.add_argument("--vectordb-storage-mode",
+                        choices=("performance", "compact"),
+                        default="performance")
+    parser.add_argument("--out", default="bench_results/ann_compare")
     args = parser.parse_args()
 
-    data_path = os.path.join(os.path.dirname(__file__), "..", args.data)
+    if args.M != 16 or args.ef_construction != 200:
+        parser.error("VectorDB currently fixes M=16 and efConstruction=200; "
+                     "non-default values would make the comparison unfair")
+    if min(args.threads, args.repeats, args.build_repeats) <= 0:
+        parser.error("threads, repeats, and build-repeats must be positive")
+
     os.makedirs(args.out, exist_ok=True)
+    data_path = os.path.join(os.path.dirname(__file__), "..", args.data)
+    print(f"Loading SIFT from {data_path}")
+    with h5py.File(data_path, "r") as handle:
+        full_base_count = handle["train"].shape[0]
+        train = handle["train"][:args.n_base].astype(np.float32)
+        test = handle["test"][:args.n_queries].astype(np.float32)
+        gt = handle["neighbors"][:args.n_queries]
+    if len(train) < full_base_count:
+        print("  subset selected: recomputing exact L2 ground truth")
+        gt = exact_l2_ground_truth(train, test)
+    print(f"  base={len(train):,} queries={len(test):,} dim={train.shape[1]} "
+          f"threads={args.threads} search_repeats={args.repeats}\n")
 
-    EF_VALUES = [50, 100, 200, 400, 800]
-
-    print(f"Loading SIFT-1M from {data_path} ...")
-    train, test, gt = load_sift(data_path, args.n_base, args.n_queries)
-    print(f"  {len(train):,} base  {len(test):,} queries  dim={train.shape[1]}")
-    print(f"  M={args.M}  ef_construction={args.ef_construction}\n")
-
-    vdb_build, vdb_rows = run_vectordb(
-        train, test, gt, EF_VALUES, args.M, args.ef_construction, args.out)
-
-    print()
-    hnsw_build, hnsw_rows = run_hnswlib(
-        train, test, gt, EF_VALUES, args.M, args.ef_construction)
-
-    print()
-    faiss_build, faiss_rows = run_faiss(
-        train, test, gt, EF_VALUES, args.M, args.ef_construction)
-
-    # ------------------------------------------------------------------
-    # Summary table
-    # ------------------------------------------------------------------
-    print()
-    header = f"{'ef':>5}  {'VectorDB':>10} {'R@10':>6}  {'hnswlib':>10} {'R@10':>6}  {'faiss':>10} {'R@10':>6}"
-    print(header)
-    print("-" * len(header))
-    for i, (ef, vqps, vrec) in enumerate(vdb_rows):
-        hpart = ""
-        if hnsw_rows and i < len(hnsw_rows):
-            _, hqps, hrec = hnsw_rows[i]
-            hpart = f"  {hqps:>10,.0f} {hrec:>6.4f}"
-        fpart = ""
-        if faiss_rows and i < len(faiss_rows):
-            _, fqps, frec = faiss_rows[i]
-            fpart = f"  {fqps:>10,.0f} {frec:>6.4f}"
-        print(f"{ef:>5}  {vqps:>10,.0f} {vrec:>6.4f}{hpart}{fpart}")
-
-    print()
-    parts = [f"VectorDB: {vdb_build:.1f}s"]
-    if hnsw_rows:
-        parts.append(f"hnswlib: {hnsw_build:.1f}s")
-    if faiss_rows:
-        parts.append(f"faiss: {faiss_build:.1f}s")
-    print("Build — " + "  ".join(parts))
-
-    # ------------------------------------------------------------------
-    # Plot: QPS vs Recall@10 (ann-benchmarks style)
-    # ------------------------------------------------------------------
-    if HAS_MATPLOTLIB:
-        fig, ax = plt.subplots(figsize=(8, 5))
-
-        v_recs = [r for _, _, r in vdb_rows]
-        v_qps  = [q for _, q, _ in vdb_rows]
-        ax.plot(v_recs, v_qps, "o-", color="tab:blue", label="VectorDB")
-
-        if hnsw_rows:
-            h_recs = [r for _, _, r in hnsw_rows]
-            h_qps  = [q for _, q, _ in hnsw_rows]
-            ax.plot(h_recs, h_qps, "s-", color="tab:orange", label="hnswlib")
-
-        if faiss_rows:
-            f_recs = [r for _, _, r in faiss_rows]
-            f_qps  = [q for _, q, _ in faiss_rows]
-            ax.plot(f_recs, f_qps, "^-", color="tab:green", label="faiss")
-
-        for ef, qps, rec in vdb_rows:
-            ax.annotate(f"ef={ef}", (rec, qps),
-                        textcoords="offset points", xytext=(4, 4),
-                        fontsize=7, color="tab:blue")
-        if hnsw_rows:
-            for ef, qps, rec in hnsw_rows:
-                ax.annotate(f"ef={ef}", (rec, qps),
-                            textcoords="offset points", xytext=(4, -12),
-                            fontsize=7, color="tab:orange")
-        if faiss_rows:
-            for ef, qps, rec in faiss_rows:
-                ax.annotate(f"ef={ef}", (rec, qps),
-                            textcoords="offset points", xytext=(-30, 4),
-                            fontsize=7, color="tab:green")
-
-        ax.set_xlabel("Recall@10")
-        ax.set_ylabel("QPS")
-        ax.set_title(f"SIFT-1M: QPS vs Recall@10  (M={args.M}, ef_construction={args.ef_construction})\n"
-                     f"ann-benchmarks methodology — {len(train):,} vectors, dim={train.shape[1]}")
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-
-        plot_path = os.path.join(args.out, "qps_vs_recall10.png")
-        fig.savefig(plot_path, dpi=150)
-        print(f"Plot saved to {plot_path}")
-        plt.close()
+    systems = {
+        "VectorDB": run_vectordb(train, test, gt, args),
+        "hnswlib": run_hnswlib(train, test, gt, args),
+        "Faiss": run_faiss(train, test, gt, args),
+    }
+    payload = {
+        "schema_version": 1,
+        "benchmark": "sift-ann-comparison",
+        "environment": environment_manifest(),
+        "config": {
+            "dataset": os.path.abspath(data_path),
+            "n_base": len(train),
+            "n_queries": len(test),
+            "dimension": int(train.shape[1]),
+            "metric": "l2",
+            "M": args.M,
+            "ef_construction": args.ef_construction,
+            "ef_values": args.ef_values,
+            "threads": args.threads,
+            "search_repeats": args.repeats,
+            "build_repeats": args.build_repeats,
+            "warmup_queries": args.warmup_queries,
+            "batch_size": args.batch_size,
+            "vectordb_storage_mode": args.vectordb_storage_mode,
+            "system_order": list(systems),
+        },
+        "systems": systems,
+    }
+    results_path = os.path.join(args.out, "results.json")
+    atomic_json_dump(results_path, payload)
+    plot_results(os.path.join(args.out, "qps_vs_recall10.png"),
+                 systems, args, len(train), train.shape[1])
+    print(f"\nMachine-readable results written to {results_path}")
 
 
 if __name__ == "__main__":

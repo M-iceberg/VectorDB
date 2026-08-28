@@ -126,6 +126,44 @@ TEST(HnswBasic, SearchResultsSortedAscending) {
     }
 }
 
+// Exercises the internal concurrent writer path directly. Besides validating
+// graph invariants, this is the focused workload run by the ThreadSanitizer CI
+// job so layer-0/upper-layer publication regressions are caught.
+TEST(HnswParallelInsert, BatchConstructionMaintainsGraphInvariants) {
+    constexpr size_t N = 2000;
+    constexpr size_t dim = 32;
+
+    HnswConfig cfg = test_cfg(dim);
+    cfg.M = 16;
+    cfg.M0 = 32;
+    cfg.ef_construction = 100;
+    HnswIndex idx(cfg);
+
+    std::vector<float> vecs(N * dim);
+    for (NodeId i = 0; i < N; ++i) {
+        auto vec = random_vec(dim, i + 50000);
+        std::copy(vec.begin(), vec.end(), vecs.begin() + i * dim);
+    }
+
+    EXPECT_EQ(idx.insert_batch_mt(vecs.data(), N, 8), 0u);
+    EXPECT_EQ(idx.size(), N);
+
+    for (NodeId i = 0; i < N; ++i) {
+        EXPECT_LE(idx.neighbor_count(i, 0), static_cast<size_t>(cfg.M0));
+        for (int layer = 1; layer <= idx.node_layer(i); ++layer)
+            EXPECT_LE(idx.neighbor_count(i, layer), static_cast<size_t>(cfg.M));
+    }
+
+    for (NodeId q = 0; q < 50; ++q) {
+        auto result = idx.search(vecs.data() + q * dim, 10, 100);
+        ASSERT_FALSE(result.empty());
+        for (const auto& [distance, id] : result) {
+            EXPECT_LT(id, N);
+            EXPECT_GE(distance, 0.0f);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Nearest neighbor correctness
 // ---------------------------------------------------------------------------
@@ -594,6 +632,42 @@ TEST(HnswCorrectness, SearchResultIdsAreValid) {
     for (auto& [d, id] : result) {
         EXPECT_TRUE(inserted.count(id)) << "returned unknown id: " << id;
     }
+}
+
+TEST(HnswCompactStorage, SearchesExternalContiguousVectors) {
+    constexpr size_t N = 512;
+    constexpr size_t dim = 16;
+    std::vector<float> vectors(N * dim);
+    for (size_t i = 0; i < N; ++i) {
+        auto vec = random_vec(dim, static_cast<uint32_t>(i + 50000));
+        std::copy(vec.begin(), vec.end(), vectors.begin() + i * dim);
+    }
+
+    HnswConfig cfg = test_cfg(dim);
+    cfg.store_vectors = false;
+    HnswIndex idx(cfg);
+    idx.set_external_vector_base(vectors.data());
+    idx.insert_batch_mt(vectors.data(), N, 4);
+
+    auto result = idx.search(vectors.data() + 123 * dim, 1, 100);
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0].second, 123u);
+    EXPECT_NEAR(result[0].first, 0.0f, 1e-6f);
+
+    auto snapshot = idx.snapshot();
+    ASSERT_EQ(snapshot.size(), N);
+    EXPECT_EQ(snapshot[123].vec,
+              std::vector<float>(vectors.begin() + 123 * dim,
+                                 vectors.begin() + 124 * dim));
+}
+
+TEST(HnswCompactStorage, RequiresVectorSourceBeforeSearch) {
+    HnswConfig cfg = test_cfg(8);
+    cfg.store_vectors = false;
+    HnswIndex idx(cfg);
+    auto vec = random_vec(8, 42);
+    idx.insert(vec.data());
+    EXPECT_THROW(idx.search(vec.data(), 1, 10), std::logic_error);
 }
 
 }  // namespace
