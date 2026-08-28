@@ -61,12 +61,11 @@ jobs:
           python-version: "3.13"
           cache: pip
 
-      - name: Install VectorDB and pinned benchmark dependencies
+      - name: Install VectorDB and benchmark dependencies
         run: |
-          python -m pip install .
-          python -m pip install \
-            numpy==2.5.0 h5py==3.16.0 hnswlib==0.8.0 \
-            faiss-cpu==1.14.3 matplotlib==3.11.0 psutil==7.2.2
+          python -m pip install scikit-build-core pybind11 numpy
+          python -m pip install . --no-build-isolation
+          python -m pip install h5py hnswlib faiss-cpu matplotlib psutil
 
       - name: Download and verify SIFT-1M
         run: |

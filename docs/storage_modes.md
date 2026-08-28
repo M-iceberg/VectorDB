@@ -66,5 +66,5 @@ python bench/bench_ann_compare.py \
 
 Linux x86/AVX2 reproduction is defined in
 `.github/workflows/x86-benchmark.yml`. It verifies AVX2 availability, pins the
-Python comparison libraries, validates the SIFT-1M SHA-256, records `/proc`
-CPU flags, and uploads raw JSON manifests and plots.
+SIFT-1M SHA-256, records `/proc` CPU flags and installed dependency versions,
+and uploads raw JSON manifests and plots.
