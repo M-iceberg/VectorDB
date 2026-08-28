@@ -44,7 +44,7 @@ jobs:
     env:
       PYTHONUNBUFFERED: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      SIFT_SHA256: 88f00da10a4b46688a8c30e6a204975043c3b84fa1e29c796518045963c91108
+      SIFT_SHA256: dd6f0a6ed6b7ebb8934680f861a33ed01ff33991eaee4fd60914d854a0ca5984
     steps:
       - uses: actions/checkout@v4
 
