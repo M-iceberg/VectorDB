@@ -34,7 +34,7 @@ on:
         default: "4"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   benchmark:
@@ -106,6 +106,19 @@ jobs:
             --repeats "${{ inputs.search_repeats || '3' }}" \
             --vectordb-modes performance compact \
             --out bench_results/linux_x86/storage_tradeoff
+
+      - name: Commit reproducible results to the push branch
+        if: github.event_name == 'push' && success()
+        run: |
+          cp linux-runner.txt bench_results/linux_x86/runner.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add bench_results/linux_x86
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Add Linux x86 AVX2 benchmark results"
+          git push
 
       - name: Upload machine-readable results
         if: always()
