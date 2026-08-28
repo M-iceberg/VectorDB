@@ -68,3 +68,17 @@ Linux x86/AVX2 reproduction is defined in
 `.github/workflows/x86-benchmark.yml`. It verifies AVX2 availability, pins the
 SIFT-1M SHA-256, records `/proc` CPU flags and installed dependency versions,
 and uploads raw JSON manifests and plots.
+
+## Linux x86/AVX2 result
+
+The full workflow completed on a 4-vCPU Intel Xeon Platinum 8370C Azure VM
+with GCC 13.3 and a clean Git tree. At `efSearch=200`, performance mode reached
+4,867 median QPS at 0.9966 Recall@10 and compact mode reached 4,683 QPS at
+0.9967. In the performance-mode comparison, hnswlib reached 6,193 QPS at
+0.9957 and Faiss reached 6,495 QPS at 0.9960.
+
+This establishes correctness and reproducibility on AVX2, but not a
+cross-platform performance win. VectorDB is 21% below hnswlib and 25% below
+Faiss at this operating point. The committed manifests and runner information
+are under `bench_results/linux_x86/`; the Apple/NEON and Linux/AVX2 results
+must remain separately scoped in performance claims.

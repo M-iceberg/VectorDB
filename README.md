@@ -209,6 +209,28 @@ QPS at 0.8266 Recall@10, versus hnswlib's 14,108/0.8133 and Faiss's
 The [GloVe manifest](bench_results/glove_compare/results.json) contains three
 search samples per operating point and the complete environment.
 
+### Linux x86/AVX2 validation
+
+The same SIFT-1M comparison also ran from a clean Git commit on a GitHub-hosted
+Linux VM: Intel Xeon Platinum 8370C, 4 vCPUs, GCC 13.3, AVX2/FMA, three search
+samples and one build per system.
+
+| System | Build | Median QPS at ef=200 | Recall@10 |
+|---|---:|---:|---:|
+| VectorDB performance | 196.65 s | 4,867 | **0.9966** |
+| VectorDB compact | 201.45 s | 4,683 | **0.9967** |
+| hnswlib | **158.29 s** | 6,193 | 0.9957 |
+| Faiss | 165.41 s | **6,495** | 0.9960 |
+
+VectorDB's Apple/NEON throughput advantage does **not** currently generalize
+to this x86 runner: performance mode is 21% below hnswlib and 25% below Faiss
+at `efSearch=200`, although recall is slightly higher. The result is retained
+as a platform-specific limitation and an AVX2 optimization target. Raw
+[performance](bench_results/linux_x86/performance/results.json),
+[compact](bench_results/linux_x86/compact/results.json), and
+[runner details](bench_results/linux_x86/runner.txt) are committed by the
+[benchmark workflow](.github/workflows/x86-benchmark.yml).
+
 Subset runs automatically recompute exact ground truth, so quick smoke results
 do not accidentally use SIFT-1M neighbors for a smaller corpus. The GloVe
 harness follows the same manifest and repetition format.
